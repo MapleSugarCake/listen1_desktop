@@ -291,8 +291,7 @@ function createWindow() {
       "*://*.music.163.com/*",
       "*://music.163.com/*",
       "*://*.xiami.com/*",
-      "*://i.y.qq.com/*",
-      "*://c.y.qq.com/*",
+      "*://*.qq.com/*",            // 【修改这行】拦截所有 qq.com 子域名，包含授权页
       "*://*.kugou.com/*",
       "*://*.kuwo.cn/*",
       "*://*.bilibili.com/*",
@@ -323,6 +322,38 @@ function createWindow() {
       callback({ cancel: false, requestHeaders: details.requestHeaders });
     }
   );
+
+  // 【新增核心代码：拦截并篡改响应头，修复跨域 Cookie 无法写入的问题】
+  session.defaultSession.webRequest.onHeadersReceived(
+    filter,
+    (details, callback) => {
+      let responseHeaders = details.responseHeaders;
+      let cookies = responseHeaders['set-cookie'] || responseHeaders['Set-Cookie'];
+
+      if (cookies) {
+        // 遍历服务器发来的所有 Cookie
+        const newCookies = cookies.map(cookie => {
+          let newCookie = cookie;
+          // 强行注入 SameSite=None 和 Secure 属性，骗过新版 Chromium 的跨域安全拦截
+          if (!newCookie.toLowerCase().includes('samesite')) {
+            newCookie += '; SameSite=None';
+          }
+          if (!newCookie.toLowerCase().includes('secure')) {
+            newCookie += '; Secure';
+          }
+          return newCookie;
+        });
+
+        // 将篡改后（允许跨域）的 Cookie 写回响应头
+        if (responseHeaders['set-cookie']) responseHeaders['set-cookie'] = newCookies;
+        if (responseHeaders['Set-Cookie']) responseHeaders['Set-Cookie'] = newCookies;
+      }
+
+      callback({ cancel: false, responseHeaders: responseHeaders });
+    }
+  );
+
+
   // Create the browser window.
   mainWindow = new BrowserWindow({
     width: windowState.width,
@@ -490,10 +521,12 @@ function hack_referer_header(details) {
   let ua_value = "";
 
   if (details.url.includes("://music.163.com/")) {
-    referer_value = "http://music.163.com/";
+    referer_value = "https://music.163.com/";
+    origin_value = "https://music.163.com";     // 【新增】严格符合标准的 Origin
   }
   if (details.url.includes("://interface3.music.163.com/")) {
-    referer_value = "http://music.163.com/";
+    referer_value = "https://music.163.com/";
+    origin_value = "https://music.163.com";     // 【新增】严格符合标准的 Origin
   }
   if (details.url.includes("://gist.githubusercontent.com/")) {
     referer_value = "https://gist.githubusercontent.com/";
@@ -518,7 +551,7 @@ function hack_referer_header(details) {
     details.url.includes("music.qq.com/") ||
     details.url.includes("imgcache.qq.com/")
   ) {
-    referer_value = "http://y.qq.com/";
+    referer_value = "https://y.qq.com/";
   }
   if (details.url.includes(".kugou.com/")) {
     referer_value = "https://www.kugou.com/";
@@ -528,7 +561,7 @@ function hack_referer_header(details) {
     ua_value = MOBILE_UA;
   }
   if (details.url.includes(".kuwo.cn/")) {
-    referer_value = "http://www.kuwo.cn/";
+    referer_value = "https://www.kuwo.cn/";
   }
   if (
     details.url.includes(".bilibili.com/") ||
@@ -550,9 +583,13 @@ function hack_referer_header(details) {
   if (details.url.includes("m.music.migu.cn")) {
     referer_value = "https://m.music.migu.cn/";
   }
+
+  //缺省逻辑：如果没有设置 Origin，则默认 Origin 与 Referer 保持一致
   if (origin_value == "") {
     origin_value = referer_value;
   }
+
+
   let isRefererSet = false;
   let isOriginSet = false;
   let isUASet = false;
@@ -695,6 +732,8 @@ ipcMain.on("openUrl", (event, arg, params) => {
       // sandbox is necessary for website js to work
       // thanks to https://github.com/sunzongzheng/music
       sandbox: true,
+      webSecurity: false,               // 【新增这行】关闭授权窗口的跨域同源策略
+      allowRunningInsecureContent: true // 【新增这行】允许 HTTPS 页面加载 HTTP 资源，解决授权页面加载第三方库失败的问题
     },
   });
   bWindow.loadURL(arg);
