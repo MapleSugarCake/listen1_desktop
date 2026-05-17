@@ -3,4 +3,3 @@ dist
 yarn.lock
 .vscode
 .DS_Store
-依赖/*
