@@ -519,14 +519,17 @@ function hack_referer_header(details) {
   let referer_value = "";
   let origin_value = "";
   let ua_value = "";
+  let cookie_value = ""; // 【新增】用于保存需要强行注入的 Cookie
 
   if (details.url.includes("://music.163.com/")) {
     referer_value = "https://music.163.com/";
-    origin_value = "https://music.163.com";     // 【新增】严格符合标准的 Origin
+    origin_value = "https://music.163.com";
+    cookie_value = "NMTID=1; os=pc"; // 【核心修复】强制提供空标识，绕过网易云搜索拦截
   }
   if (details.url.includes("://interface3.music.163.com/")) {
     referer_value = "https://music.163.com/";
-    origin_value = "https://music.163.com";     // 【新增】严格符合标准的 Origin
+    origin_value = "https://music.163.com";
+    cookie_value = "NMTID=1; os=pc"; // 【核心修复】强制提供空标识
   }
   if (details.url.includes("://gist.githubusercontent.com/")) {
     referer_value = "https://gist.githubusercontent.com/";
@@ -584,46 +587,53 @@ function hack_referer_header(details) {
     referer_value = "https://m.music.migu.cn/";
   }
 
-  //缺省逻辑：如果没有设置 Origin，则默认 Origin 与 Referer 保持一致
-  if (origin_value == "") {
+  // 缺省逻辑：如果没有设置 Origin，则默认 Origin 与 Referer 保持一致
+  if (origin_value === "") {
     origin_value = referer_value;
   }
-
 
   let isRefererSet = false;
   let isOriginSet = false;
   let isUASet = false;
+  let isCookieSet = false;
+
   let headers = details.requestHeaders;
 
-  for (let i = 0, l = headers.length; i < l; ++i) {
-    if (
-      replace_referer &&
-      headers[i].name == "Referer" &&
-      referer_value != ""
-    ) {
-      headers[i].value = referer_value;
+  // 【核心修复】改为 for...in 忽略大小写遍历对象，解决 Electron 内核 Headers 对象遍历失效问题
+  for (const key in headers) {
+    const lowerKey = key.toLowerCase();
+
+    if (replace_referer && lowerKey === "referer" && referer_value !== "") {
+      headers[key] = referer_value;
       isRefererSet = true;
     }
-    if (replace_origin && headers[i].name == "Origin" && referer_value != "") {
-      headers[i].value = origin_value;
+    if (replace_origin && lowerKey === "origin" && origin_value !== "") {
+      headers[key] = origin_value;
       isOriginSet = true;
     }
-    if (headers[i].name === "User-Agent" && ua_value !== "") {
-      headers[i].value = ua_value;
+    if (lowerKey === "user-agent" && ua_value !== "") {
+      headers[key] = ua_value;
       isUASet = true;
+    }
+    if (lowerKey === "cookie" && cookie_value !== "") {
+      // 如果请求本身已经有了 Cookie，则将 NMTID 拼接到末尾
+      headers[key] = headers[key] + `; ${cookie_value}`;
+      isCookieSet = true;
     }
   }
 
-  if (add_referer && !isRefererSet && referer_value != "") {
+  // 如果遍历后发现没有这些头，则缺省补全
+  if (add_referer && !isRefererSet && referer_value !== "") {
     headers["Referer"] = referer_value;
   }
-
-  if (add_origin && !isOriginSet && referer_value != "") {
+  if (add_origin && !isOriginSet && origin_value !== "") {
     headers["Origin"] = origin_value;
   }
-
   if (!isUASet && ua_value !== "") {
     headers["User-Agent"] = ua_value;
+  }
+  if (!isCookieSet && cookie_value !== "") {
+    headers["Cookie"] = cookie_value; // 发送无 Cookie 请求时，强制赋予虚拟 Cookie
   }
 
   details.requestHeaders = headers;
