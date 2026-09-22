@@ -9,15 +9,27 @@ const {
   screen,
   Tray,
 } = electron;
-const Store = require("electron-store");
 const { autoUpdater } = require("electron-updater");
-const remoteMain = require("@electron/remote/main");
 const { join } = require("path");
+const { createDesktopApi } = require("./desktop-api");
+const { applyPlatformHeaders } = require("./request-headers");
 
-const store = new Store();
+// The packaged test executable must use the same disposable data boundary as source tests.
+if (process.env.LISTEN1_TEST_USER_DATA) {
+  const profile = require("node:path").resolve(
+    process.env.LISTEN1_TEST_USER_DATA
+  );
+  require("node:fs").mkdirSync(profile, { recursive: true });
+  app.setPath("userData", profile);
+  app.setPath("sessionData", profile);
+}
+
+let store;
 const iconPath = join(__dirname, "/listen1_chrome_extension/images/logo.png");
 
-autoUpdater.checkForUpdatesAndNotify();
+autoUpdater.on("error", (error) =>
+  console.warn("Update check failed:", error.code || "UPDATE_ERROR")
+);
 
 let floatingWindowCssKey = undefined,
   appIcon = null,
@@ -50,16 +62,70 @@ switch (process.platform) {
 // Keep a global reference of the window object, if you don't, the window will
 // be closed automatically when the JavaScript object is garbage collected.
 /** @type {{ width: number; height: number; maximized: boolean; zoomLevel: number}} */
-const windowState = store.get("windowState") || {
+const windowState = {
   width: 1000,
   height: 670,
   maximized: false,
   zoomLevel: 0,
 };
 /** @type {electron.Config} */
-let proxyConfig = store.get("proxyConfig") || {
+let proxyConfig = {
   mode: "system",
 };
+const settingsReady = import("electron-store").then(({ default: Store }) => {
+  store = new Store();
+  Object.assign(windowState, store.get("windowState") || {});
+  proxyConfig = store.get("proxyConfig") || proxyConfig;
+});
+const desktopApi = createDesktopApi({
+  getMainWindow: () => mainWindow,
+  getFloatingWindow: () => floatingWindow,
+});
+
+const FLOATING_WINDOW_DEFAULT_BOUNDS = {
+  width: 1000,
+  height: 70,
+};
+
+/**
+ * @param {Electron.Rectangle | undefined} bounds
+ * @param {Electron.Display} display
+ * @returns {Electron.Rectangle | undefined}
+ */
+function normalizeFloatingWindowBounds(bounds, display) {
+  if (bounds == null) {
+    return undefined;
+  }
+
+  const getNumber = (value, fallback) =>
+    Number.isFinite(value) ? value : fallback;
+  const storedWidth = getNumber(
+    bounds.width,
+    FLOATING_WINDOW_DEFAULT_BOUNDS.width
+  );
+  const width = Math.min(
+    Math.max(storedWidth, 640),
+    Math.min(display.workAreaSize.width, 1200)
+  );
+  const height = FLOATING_WINDOW_DEFAULT_BOUNDS.height;
+  const storedX = getNumber(bounds.x, display.workArea.x);
+  const storedY = getNumber(bounds.y, display.workArea.y);
+  const x = Math.min(
+    Math.max(storedX, display.workArea.x),
+    display.workArea.x + display.workArea.width - width
+  );
+  const y = Math.min(
+    Math.max(storedY, display.workArea.y),
+    display.workArea.y + display.workArea.height - height
+  );
+
+  return {
+    x,
+    y,
+    width,
+    height,
+  };
+}
 
 const globalShortcutMapping = {
   "CmdOrCtrl+Alt+Left": "left",
@@ -206,17 +272,19 @@ function createFloatingWindow(cssStyle) {
   }
   if (!floatingWindow) {
     /** @type {Electron.Rectangle} */
-    const winBounds = store.get("floatingWindowBounds");
+    const winBounds = normalizeFloatingWindowBounds(
+      store.get("floatingWindowBounds"),
+      display
+    );
 
     floatingWindow = new BrowserWindow({
-      width: 1000,
-      minWidth: 640,
-      maxWidth: 1920,
-      height: 70,
+      width: FLOATING_WINDOW_DEFAULT_BOUNDS.width,
+      height: FLOATING_WINDOW_DEFAULT_BOUNDS.height,
       titleBarStyle: "hidden",
       transparent: true,
       frame: false,
-      resizable: true,
+      resizable: false,
+      thickFrame: false,
       hasShadow: false,
       alwaysOnTop: true,
       webPreferences: {
@@ -237,7 +305,6 @@ function createFloatingWindow(cssStyle) {
     floatingWindow.loadURL(`file://${__dirname}/floatingWindow.html`);
     floatingWindow.setAlwaysOnTop(true, "floating");
     floatingWindow.setIgnoreMouseEvents(false);
-    // NOTICE: setResizable should be set, otherwise mouseleave event won't trigger in windows environment
     floatingWindow.webContents.on("did-finish-load", async () => {
       await updateFloatingWindow(cssStyle);
     });
@@ -291,7 +358,7 @@ function createWindow() {
       "*://*.music.163.com/*",
       "*://music.163.com/*",
       "*://*.xiami.com/*",
-      "*://*.qq.com/*",            // 【修改这行】拦截所有 qq.com 子域名，包含授权页
+      "*://*.qq.com/*", // 【修改这行】拦截所有 qq.com 子域名，包含授权页
       "*://*.kugou.com/*",
       "*://*.kuwo.cn/*",
       "*://*.bilibili.com/*",
@@ -312,12 +379,11 @@ function createWindow() {
         )
       ) {
         const { url } = details;
-        const code = url.split("=")[1];
-        mainWindow.webContents.executeJavaScript(
-          'GithubClient.github.handleCallback("' + code + '");'
-        );
+        const code = new URL(url).searchParams.get("code");
+        if (code && code.length < 1000)
+          mainWindow.webContents.send("githubOAuthCode", code);
       } else {
-        hack_referer_header(details);
+        applyPlatformHeaders(details);
       }
       callback({ cancel: false, requestHeaders: details.requestHeaders });
     }
@@ -328,42 +394,47 @@ function createWindow() {
     filter,
     (details, callback) => {
       let responseHeaders = details.responseHeaders;
-      let cookies = responseHeaders['set-cookie'] || responseHeaders['Set-Cookie'];
+      let cookies =
+        responseHeaders["set-cookie"] || responseHeaders["Set-Cookie"];
 
       if (cookies) {
         // 遍历服务器发来的所有 Cookie
-        const newCookies = cookies.map(cookie => {
+        const newCookies = cookies.map((cookie) => {
           let newCookie = cookie;
           // 强行注入 SameSite=None 和 Secure 属性，骗过新版 Chromium 的跨域安全拦截
-          if (!newCookie.toLowerCase().includes('samesite')) {
-            newCookie += '; SameSite=None';
+          if (!newCookie.toLowerCase().includes("samesite")) {
+            newCookie += "; SameSite=None";
           }
-          if (!newCookie.toLowerCase().includes('secure')) {
-            newCookie += '; Secure';
+          if (!newCookie.toLowerCase().includes("secure")) {
+            newCookie += "; Secure";
           }
           return newCookie;
         });
 
         // 将篡改后（允许跨域）的 Cookie 写回响应头
-        if (responseHeaders['set-cookie']) responseHeaders['set-cookie'] = newCookies;
-        if (responseHeaders['Set-Cookie']) responseHeaders['Set-Cookie'] = newCookies;
+        if (responseHeaders["set-cookie"])
+          responseHeaders["set-cookie"] = newCookies;
+        if (responseHeaders["Set-Cookie"])
+          responseHeaders["Set-Cookie"] = newCookies;
       }
 
       callback({ cancel: false, responseHeaders: responseHeaders });
     }
   );
 
-
   // Create the browser window.
   mainWindow = new BrowserWindow({
+    show: !process.env.LISTEN1_TEST_USER_DATA,
     width: windowState.width,
     height: windowState.height,
     minHeight: 300,
     minWidth: 600,
     webPreferences: {
-      nodeIntegration: true,
-      enableRemoteModule: true,
-      contextIsolation: false,
+      preload: join(__dirname, "desktop-preload.js"),
+      backgroundThrottling: !process.env.LISTEN1_TEST_USER_DATA,
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
     },
     icon: iconPath,
     titleBarStyle: "hiddenInset",
@@ -402,15 +473,24 @@ function createWindow() {
   });
 
   // and load the index.html of the app.
-  const ua =
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_14_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/72.0.3626.119 Safari/537.36";
-
-  mainWindow.webContents.session.setProxy(proxyConfig).then(() => {
-    mainWindow.loadURL(
-      `file://${__dirname}/listen1_chrome_extension/listen1.html`,
-      { userAgent: ua }
-    );
-  });
+  mainWindow.webContents.session
+    .setProxy(proxyConfig)
+    .then(() => {
+      mainWindow.loadFile(
+        join(__dirname, "listen1_chrome_extension/listen1.html")
+      );
+    })
+    .catch((error) => {
+      console.error(
+        "Proxy initialization failed:",
+        error.code || "PROXY_ERROR"
+      );
+      mainWindow.loadFile(
+        join(__dirname, "listen1_chrome_extension/listen1.html")
+      );
+    });
+  mainWindow.webContents.on("will-navigate", (event) => event.preventDefault());
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
 
   setThumbarPause();
   // Emitted when the window is closed.
@@ -505,131 +585,15 @@ function createWindow() {
   initialTray(mainWindow);
 }
 
-const MOBILE_UA =
-  "Mozilla/5.0 (iPhone; CPU iPhone OS 14_3 like Mac OS X) AppleWebKit/534.30 (KHTML, like Gecko) Version/4.0 Mobile Safari/534.30";
-
-/**
- * @param {electron.OnBeforeSendHeadersListenerDetails} details
- */
-function hack_referer_header(details) {
-  let replace_referer = true;
-  let replace_origin = true;
-  let add_referer = true;
-  let add_origin = true;
-  let referer_value = "";
-  let origin_value = "";
-  let ua_value = "";
-
-  if (details.url.includes("://music.163.com/")) {
-    referer_value = "https://music.163.com/";
-    origin_value = "https://music.163.com";     // 【新增】严格符合标准的 Origin
-  }
-  if (details.url.includes("://interface3.music.163.com/")) {
-    referer_value = "https://music.163.com/";
-    origin_value = "https://music.163.com";     // 【新增】严格符合标准的 Origin
-  }
-  if (details.url.includes("://gist.githubusercontent.com/")) {
-    referer_value = "https://gist.githubusercontent.com/";
-  }
-
-  if (details.url.includes(".xiami.com/")) {
-    add_origin = false;
-    referer_value = "https://www.xiami.com/";
-  }
-  if (details.url.includes("www.xiami.com/api/search/searchSongs")) {
-    const key = /key%22:%22(.*?)%22/.exec(details.url)[1];
-    add_origin = false;
-    referer_value = `https://www.xiami.com/search?key=${key}`;
-  }
-  if (details.url.includes("c.y.qq.com/")) {
-    referer_value = "https://y.qq.com/";
-    origin_value = "https://y.qq.com";
-  }
-  if (
-    details.url.includes("y.qq.com/") ||
-    details.url.includes("qqmusic.qq.com/") ||
-    details.url.includes("music.qq.com/") ||
-    details.url.includes("imgcache.qq.com/")
-  ) {
-    referer_value = "https://y.qq.com/";
-  }
-  if (details.url.includes(".kugou.com/")) {
-    referer_value = "https://www.kugou.com/";
-    ua_value = MOBILE_UA;
-  }
-  if (details.url.includes("m.kugou.com/")) {
-    ua_value = MOBILE_UA;
-  }
-  if (details.url.includes(".kuwo.cn/")) {
-    referer_value = "https://www.kuwo.cn/";
-  }
-  if (
-    details.url.includes(".bilibili.com/") ||
-    details.url.includes(".bilivideo.com/")
-  ) {
-    referer_value = "https://www.bilibili.com/";
-    replace_origin = false;
-    add_origin = false;
-  }
-  if (details.url.includes('.bilivideo.cn')) {
-    referer_value = 'https://www.bilibili.com/';
-    origin_value = 'https://www.bilibili.com/';
-    add_referer = true;
-    add_origin = true;
-  }
-  if (details.url.includes(".migu.cn")) {
-    referer_value = "http://music.migu.cn/v3/music/player/audio?from=migu";
-  }
-  if (details.url.includes("m.music.migu.cn")) {
-    referer_value = "https://m.music.migu.cn/";
-  }
-
-  //缺省逻辑：如果没有设置 Origin，则默认 Origin 与 Referer 保持一致
-  if (origin_value == "") {
-    origin_value = referer_value;
-  }
-
-
-  let isRefererSet = false;
-  let isOriginSet = false;
-  let isUASet = false;
-  let headers = details.requestHeaders;
-
-  for (let i = 0, l = headers.length; i < l; ++i) {
-    if (
-      replace_referer &&
-      headers[i].name == "Referer" &&
-      referer_value != ""
-    ) {
-      headers[i].value = referer_value;
-      isRefererSet = true;
-    }
-    if (replace_origin && headers[i].name == "Origin" && referer_value != "") {
-      headers[i].value = origin_value;
-      isOriginSet = true;
-    }
-    if (headers[i].name === "User-Agent" && ua_value !== "") {
-      headers[i].value = ua_value;
-      isUASet = true;
-    }
-  }
-
-  if (add_referer && !isRefererSet && referer_value != "") {
-    headers["Referer"] = referer_value;
-  }
-
-  if (add_origin && !isOriginSet && referer_value != "") {
-    headers["Origin"] = origin_value;
-  }
-
-  if (!isUASet && ua_value !== "") {
-    headers["User-Agent"] = ua_value;
-  }
-
-  details.requestHeaders = headers;
-}
-
 ipcMain.on("currentLyric", (event, arg) => {
+  if (
+    !desktopApi.isMain(event) ||
+    !(
+      typeof arg === "string" ||
+      (arg && typeof arg.lyric === "string" && typeof arg.tlyric === "string")
+    )
+  )
+    return;
   if (floatingWindow && floatingWindow !== null) {
     if (typeof arg === "string") {
       floatingWindow.webContents.send("currentLyric", arg);
@@ -642,16 +606,21 @@ ipcMain.on("currentLyric", (event, arg) => {
 });
 
 ipcMain.on("trackPlayingNow", (event, track) => {
+  if (!desktopApi.isMain(event) || !track || typeof track.title !== "string")
+    return;
   if (mainWindow != null) {
     initialTray(mainWindow, track);
   }
 });
 
 ipcMain.on("isPlaying", (event, isPlaying) => {
+  if (!desktopApi.isMain(event) || typeof isPlaying !== "boolean") return;
   isPlaying ? setThumbbarPlay() : setThumbarPause();
 });
 
-ipcMain.on("control", async (event, arg, params) => {
+async function handleControl(event, arg, params) {
+  if (!desktopApi.validControl(event, arg, params))
+    throw new Error("Unsupported desktop control");
   switch (arg) {
     case "enable_global_shortcut":
       enableGlobalShortcuts();
@@ -683,11 +652,11 @@ ipcMain.on("control", async (event, arg, params) => {
       break;
 
     case "float_window_accept_mouse_event":
-      floatingWindow.setIgnoreMouseEvents(false);
+      floatingWindow?.setIgnoreMouseEvents(false);
       break;
 
     case "float_window_ignore_mouse_event":
-      floatingWindow.setIgnoreMouseEvents(true, { forward: true });
+      floatingWindow?.setIgnoreMouseEvents(true, { forward: true });
       break;
 
     case "float_window_close":
@@ -715,34 +684,42 @@ ipcMain.on("control", async (event, arg, params) => {
       break;
   }
   // event.sender.send('asynchronous-reply', 'pong')
+}
+ipcMain.handle("desktop:control", handleControl);
+ipcMain.on("control", (event, arg, params) => {
+  handleControl(event, arg, params).catch(() => {});
 });
 
-ipcMain.on("openUrl", (event, arg, params) => {
-  const bWindow = new BrowserWindow({
-    parent: mainWindow,
-    height: 700,
-    resizable: true,
-    width: 985,
-    frame: true,
-    fullscreen: false,
-    maximizable: true,
-    minimizable: true,
-    autoHideMenuBar: true,
-    webPreferences: {
-      // sandbox is necessary for website js to work
-      // thanks to https://github.com/sunzongzheng/music
-      sandbox: true,
-      webSecurity: false,               // 【新增这行】关闭授权窗口的跨域同源策略
-      allowRunningInsecureContent: true // 【新增这行】允许 HTTPS 页面加载 HTTP 资源，解决授权页面加载第三方库失败的问题
-    },
-  });
-  bWindow.loadURL(arg);
-  bWindow.setMenu(null);
-});
-
-ipcMain.on("floatWindowMoving", (e, { mouseX, mouseY }) => {
+ipcMain.on("floatWindowMoving", (e, offsets) => {
+  if (
+    !desktopApi.isFloating(e) ||
+    !offsets ||
+    !Number.isFinite(offsets.mouseX) ||
+    !Number.isFinite(offsets.mouseY)
+  )
+    return;
+  const { mouseX, mouseY } = offsets;
   const { x, y } = screen.getCursorScreenPoint();
-  floatingWindow?.setPosition(x - mouseX, y - mouseY);
+  if (!floatingWindow) {
+    return;
+  }
+
+  const display = screen.getDisplayNearestPoint({ x, y });
+  const width = Math.min(
+    FLOATING_WINDOW_DEFAULT_BOUNDS.width,
+    display.workArea.width
+  );
+  const height = FLOATING_WINDOW_DEFAULT_BOUNDS.height;
+  const nextX = Math.min(
+    Math.max(x - mouseX, display.workArea.x),
+    display.workArea.x + display.workArea.width - width
+  );
+  const nextY = Math.min(
+    Math.max(y - mouseY, display.workArea.y),
+    display.workArea.y + display.workArea.height - height
+  );
+
+  floatingWindow.setBounds({ x: nextX, y: nextY, width, height });
 });
 
 const gotTheLock = app.requestSingleInstanceLock();
@@ -762,11 +739,21 @@ if (!gotTheLock) {
   });
 
   // Create myWindow, load the rest of the app, etc...
-  app.on("ready", () => {
-    createWindow();
-    remoteMain.initialize();
-    remoteMain.enable(mainWindow.webContents);
-  });
+  app
+    .whenReady()
+    .then(() => settingsReady)
+    .then(() => {
+      createWindow();
+      if (app.isPackaged && !process.env.LISTEN1_TEST_USER_DATA)
+        autoUpdater.checkForUpdatesAndNotify().catch(() => {});
+    })
+    .catch((error) => {
+      console.error(
+        "Application initialization failed:",
+        error.code || error.message
+      );
+      app.quit();
+    });
 }
 
 // Quit when all windows are closed.
@@ -779,19 +766,27 @@ app.on("window-all-closed", () => {
 });
 
 /* 'activate' is emitted when the user clicks the Dock icon (OS X) */
-app.on("activate", () => mainWindow.show());
+app.on("activate", () => {
+  if (mainWindow) mainWindow.show();
+});
 
 /* 'before-quit' is emitted when Electron receives
  * the signal to exit and wants to start closing windows */
 app.on("before-quit", () => {
-  if (mainWindow.webContents.isDevToolsOpened()) {
+  if (
+    mainWindow &&
+    !mainWindow.isDestroyed() &&
+    mainWindow.webContents.isDevToolsOpened()
+  ) {
     mainWindow.webContents.closeDevTools();
   }
-  if (floatingWindow) {
+  if (floatingWindow && store) {
     store.set("floatingWindowBounds", floatingWindow.getBounds());
   }
-  store.set("windowState", windowState);
-  store.set("proxyConfig", proxyConfig);
+  if (store) {
+    store.set("windowState", windowState);
+    store.set("proxyConfig", proxyConfig);
+  }
 
   willQuitApp = true;
 });
