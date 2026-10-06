@@ -20,6 +20,8 @@ l1Player → bridge → threadPlayer / Howler → BG_PLAYER:* → UI
 
 桌面播放核心在主窗口渲染进程运行，`player_thread.js` 没有创建独立线程。保留现有 AngularJS 和两套界面布局。
 
+桌面音量均衡使用 `app/audio-assets.js` 经当前 session 获取完整音频，共享子模块的 `loudness.js` 测量 RMS，`normalized_audio.js` 播放相同资产。固定增益／轻微限峰位于独立主音量之前；关闭或确认不可处理时使用原 Howler 路径。架构取舍见 [ADR](docs/adr/0001-rms-audio-playback.md)，本轮验证见 [音量均衡报告](docs/maintenance/LOUDNESS.md)。
+
 ## 2. 目录与依赖
 
 | 路径                                           | 职责                                                                    |
@@ -41,16 +43,19 @@ l1Player → bridge → threadPlayer / Howler → BG_PLAYER:* → UI
 
 主窗口通过专用 preload 暴露 `window.listen1Desktop`，`@electron/remote` 已移除，主窗口设置 `contextIsolation: true`、`nodeIntegration: false`、`sandbox: true`。浏览器扩展仍有独立适配，不能以桌面验证代替扩展验证。
 
-| 页面接口                               | 作用与返回                                                         |
-| -------------------------------------- | ------------------------------------------------------------------ |
-| `control(operation, params)`           | 白名单窗口、快捷键、歌词、代理操作；Promise                        |
-| `openExternal(url)` / `openLogin(url)` | HTTP(S) 外部链接 / 有来源限制的隔离登录窗口；Promise               |
-| `cookieGet/Set/Remove(request)`        | 平台域名、字段和有效期校验；Promise                                |
-| `importLocalMusic()`                   | 文件选择 → 最多 4 个并发标签读取 → `{ cancelled, tracks, errors }` |
-| `localFileUrl(trackId)`                | 旧 `lmtrack_` 绝对路径 ID → 编码后的文件 URL；Promise              |
-| `setLyric` / `setTrack` / `setPlaying` | 转发歌词、曲目信息和播放状态                                       |
-| `on(channel, callback)`                | 白名单桌面事件，去掉 Electron event；返回取消订阅函数              |
-| `setZoomLevel(level)`                  | 有范围检查的页面缩放                                               |
+| 页面接口                                                            | 作用与返回                                                         |
+| ------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `control(operation, params)`                                        | 白名单窗口、快捷键、歌词、代理操作；Promise                        |
+| `openExternal(url)` / `openLogin(url)`                              | HTTP(S) 外部链接 / 有来源限制的隔离登录窗口；Promise               |
+| `cookieGet/Set/Remove(request)`                                     | 平台域名、字段和有效期校验；Promise                                |
+| `importLocalMusic()`                                                | 文件选择 → 最多 4 个并发标签读取 → `{ cancelled, tracks, errors }` |
+| `localFileUrl(trackId)`                                             | 旧 `lmtrack_` 绝对路径 ID → 编码后的文件 URL；Promise              |
+| `prepareAudioSource(request)`                                       | 只读准备当前完整资产，返回资产 ID、指纹、字节数或错误码；Promise   |
+| `readAudioSource(request)`                                          | 已准备资产的有界分块读取，单块最多 1 MiB；Promise                  |
+| `cancelAudioPreparation(requestId)` / `releaseAudioSource(assetId)` | 取消读取／释放资产租约；Promise                                    |
+| `setLyric` / `setTrack` / `setPlaying`                              | 转发歌词、曲目信息和播放状态                                       |
+| `on(channel, callback)`                                             | 白名单桌面事件，去掉 Electron event；返回取消订阅函数              |
+| `setZoomLevel(level)`                                               | 有范围检查的页面缩放                                               |
 
 主进程校验主窗口、主 frame 和准确本地页面来源；歌词窗使用独立控制白名单。歌词输入保留 `{ lyric, tlyric }`，转发通道分别为 `currentLyric` 和 `currentLyricTrans`。歌词窗使用 `textContent`，保留原有工作区边界处理；原始 ipcRenderer 不暴露给页面。调用双方和窗口生命周期必须一起维护。
 
@@ -83,18 +88,19 @@ npm run vendor:check --prefix app/listen1_chrome_extension
 
 已有子模块修改时不要用初始化命令覆盖工作。Windows 临时工具链准备及验证命令见[测试指南](tests/README.md)。
 
-| 命令                                       | 范围                                                |
-| ------------------------------------------ | --------------------------------------------------- |
-| `npm run dev`                              | 跨平台 Node 启动脚本，不提供热更新                  |
-| `npm run dist`                             | 当前宿主默认目标，`--publish never`                 |
-| `npm run dist:win`                         | Windows NSIS、7z；x64、arm64                        |
-| `npm run dist:win:test`                    | 明确只构建 x64，输出 `dist/windows-test`，不发布    |
-| `npm run dist:mac`                         | macOS DMG：x64、arm64、universal；配置最低 macOS 13 |
-| `npm run dist:linux`                       | x64、arm64；tar.gz、AppImage、deb                   |
-| `npm run dist:linux64` / `dist:linuxArm64` | 单架构 Linux                                        |
-| `npm test`                                 | Node 行为测试，包含子模块测试                       |
-| `npm run test:electron`                    | 隔离 profile 的 Electron 页面与桌面能力回归         |
-| `npm run test:online`                      | 游客在线搜索、分页和 5% 音量播放；单独记录外部失败  |
+| 命令                                       | 范围                                                                                              |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| `npm run dev`                              | 跨平台 Node 启动脚本，不提供热更新                                                                |
+| `npm run dist`                             | 当前宿主默认目标，`--publish never`                                                               |
+| `npm run dist:win`                         | Windows NSIS、7z；x64、arm64                                                                      |
+| `npm run dist:win:test`                    | 明确只构建 x64，输出 `dist/windows-test`，不发布                                                  |
+| `npm run dist:mac`                         | macOS DMG：x64、arm64、universal；配置最低 macOS 13                                               |
+| `npm run dist:linux`                       | x64、arm64；tar.gz、AppImage、deb                                                                 |
+| `npm run dist:linux64` / `dist:linuxArm64` | 单架构 Linux                                                                                      |
+| `npm test`                                 | Node 行为测试，包含子模块测试                                                                     |
+| `npm run test:electron`                    | 隔离 profile 的 Electron 页面与桌面能力回归                                                       |
+| `npm run test:online`                      | 游客在线搜索、分页和 5% 音量播放；单独记录外部失败                                                |
+| `node tests/loudness-electron.cjs`         | 隔离均衡回归及 FFmpeg 独立电平／真峰值测量；需 FFmpeg，`LISTEN1_LOUDNESS_ONLINE=1` 扩展为在线样本 |
 
 32 位 Windows/Linux 和 Linux armv7l 目标已移除。Windows 以 10 及以上为运行基线，macOS 最低 13；本轮实测范围以报告为准，配置架构不是兼容性认证。
 

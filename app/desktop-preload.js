@@ -40,6 +40,14 @@ const events = new Set([
 contextBridge.exposeInMainWorld("listen1Desktop", {
   version: 1,
   platform: process.platform,
+  prepareAudioSource: (request) =>
+    ipcRenderer.invoke("desktop:prepareAudioSource", request),
+  readAudioSource: (request) =>
+    ipcRenderer.invoke("desktop:readAudioSource", request),
+  cancelAudioPreparation: (requestId) =>
+    ipcRenderer.invoke("desktop:cancelAudioPreparation", requestId),
+  releaseAudioSource: (assetId) =>
+    ipcRenderer.invoke("desktop:releaseAudioSource", assetId),
   /**
    * 通过 desktop:control 请求执行白名单桌面操作，由主进程再次校验来源及参数。
    * @param operation 桌面控制白名单中的操作名。

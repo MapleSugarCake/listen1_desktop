@@ -129,6 +129,27 @@ function allowedUrl(value, domains) {
  * @returns {Object} 包含 isMain、isFloating、validControl 的对象。
  */
 function createDesktopApi({ getMainWindow, getFloatingWindow }) {
+  let audioAssets;
+  const getAudioAssets = () => {
+    if (!audioAssets) {
+      const { createAudioAssets } = require("./audio-assets");
+      audioAssets = createAudioAssets((url, options) =>
+        getMainWindow().webContents.session.fetch(url, options)
+      );
+      const { app } = require("electron");
+      const manager = audioAssets;
+      app.once("will-quit", () => manager.dispose());
+      getMainWindow().webContents.on("did-start-navigation", (details) => {
+        if (details.isMainFrame && !details.isSameDocument)
+          manager.resetConsumers();
+      });
+      getMainWindow().webContents.once("destroyed", () => {
+        manager.dispose();
+        audioAssets = null;
+      });
+    }
+    return audioAssets;
+  };
   /**
    * 同时校验发送窗口、主 frame 和准确的本地页面路径，拒绝子 frame、远程页面及已销毁窗口。
    * @param event 触发当前处理器的事件对象；使用 sender、senderFrame 字段。
@@ -217,6 +238,12 @@ function createDesktopApi({ getMainWindow, getFloatingWindow }) {
         return fn(...args);
       }
     );
+  handle("desktop:prepareAudioSource", (input) =>
+    getAudioAssets().prepare(input)
+  );
+  handle("desktop:readAudioSource", (input) => getAudioAssets().read(input));
+  handle("desktop:cancelAudioPreparation", (id) => audioAssets?.cancel(id));
+  handle("desktop:releaseAudioSource", (id) => audioAssets?.release(id));
   handle(
     "desktop:openExternal",
     /**

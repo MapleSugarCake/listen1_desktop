@@ -7,6 +7,10 @@
 | `npm test`                              | 请求乱序/取消/超时、队列生命周期、批量事件、URL 缓存重试、歌词容错、IPC 来源、本地并发、旧数据、加密向量 |
 | `npm run test:electron`                 | 实际 Electron 页面、隔离 preload、本地播放、歌词、主题/语言、备份、断网收尾、代理和重启                  |
 | `npm run test:online`                   | 六平台实际搜索输入/标签/分页/入队/地址/30 秒播放/暂停恢复；每平台尝试前六条直到两首可播放                |
+| `node tests/netease-electron.cjs`       | 网易歌曲/歌单去重的真实 DOM、两布局四主题、账号/歌单失败重试、退出及六种语言；默认离线夹具               |
+| `node tests/netease-login.cjs`          | 人工网易账号授权后读取三类歌单、详情并检查重启识别；每种方式强制使用全新隔离 profile                     |
+| `node tests/loudness-electron.cjs`      | 当前完整资产 RMS、实际适配器输出及主音量／静音／跳转、两布局四主题六语言；需 FFmpeg                      |
+| `node scripts/loudness-listening.cjs`   | 将已测 WAV 生成短 A/B 试听页，材料保存在忽略目录；不代替人工试听                                         |
 | `node scripts/measure-queue.cjs`        | 同机更新前后核心队列与 JSON 序列化，五次样本；不包含 DOM 和磁盘                                          |
 | `node scripts/dependency-inventory.cjs` | 三层直接/传递依赖清单、官方 latest 核对、npm 官方审计                                                    |
 | `npm run dist:win:test`                 | 仅 x64 的 NSIS 和 7z，不发布                                                                             |
@@ -28,6 +32,22 @@ npm run test:electron
 ```
 
 在线测试使用游客会话，禁用自动换源，每首播放前设 5% 音量并解除静音；可能实际出声。音频检查同时记录 Howler playing、播放进度、静音状态和 Chromium `isCurrentlyAudible()`。这是音频输出检测，不能验证扬声器接线或代替人耳听感；主动静音的样本标为音频未验证。日志只保留平台、公共曲目 ID、阶段、HTTP/业务码，不保存 Cookie、令牌或带签名播放 URL。
+
+网易专项测试同时捕获 Angular `ngRepeat:dupes` 控制台错误和真实 DOM 行数；在线模式用“星球卑”，以当前唯一结果数为断言，不固定线上条数。人工登录测试须由操作者在官方窗口分别完成 QQ 授权和网易扫码，再点击 Listen1 的“我已经登录完成”；脚本不填写凭据、不记录账号和私人歌单内容。每次使用新运行名称，已存在 profile 时拒绝复用；登录期间的测试 profile 包含实际会话，应留在忽略目录且不要分享。结果只保存成功/失败、错误码、歌单/曲目数量和重启比对布尔结论。
+
+```powershell
+$env:LISTEN1_NETEASE_RUN = 'netease-fixture-new-run'
+node tests/netease-electron.cjs
+$env:LISTEN1_NETEASE_ONLINE = '1'
+$env:LISTEN1_NETEASE_RUN = 'netease-online-new-run'
+node tests/netease-electron.cjs
+Remove-Item Env:LISTEN1_NETEASE_ONLINE
+$env:LISTEN1_NETEASE_LOGIN_METHOD = 'qq' # 下一独立会话改为 scan
+$env:LISTEN1_NETEASE_LOGIN_RUN = 'netease-login-qq-new-run'
+node tests/netease-login.cjs
+```
+
+网易本轮修复及实际验收边界见 [网易维护记录](../docs/maintenance/NETEASE.md)。游客成功不能代替真实账号和两种授权路径通过。
 
 页面测试通过 Playwright 操作 DOM 与播放器边界。本地测试使用合成 WAV/歌词，原生文件选择框返回值由测试替换，之后标签解析、IPC、歌单、Howler 和解码均走实际链路。原生文件框交互、系统托盘点击、真实全局按键及多显示器等未自动覆盖的场景必须另记。
 

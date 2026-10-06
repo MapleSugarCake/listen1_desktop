@@ -28,6 +28,7 @@ const path = require("node:path");
  * _electron：从 playwright 引入，用于通过 Playwright 启动和控制 Electron；类型为 typeof import("playwright")._electron。
  */
 const { _electron } = require("playwright");
+const assert = require("node:assert/strict");
 /**
  * root：由脚本目录解析出的项目根目录；类型为 string。
  * @type {string}
@@ -96,6 +97,13 @@ async function main() {
   });
   try {
     const page = await app.firstWindow();
+    page.on("console", (message) => {
+      if (
+        message.type() === "error" &&
+        message.text().includes("ngRepeat:dupes")
+      )
+        report.errors.push("ngRepeat:dupes");
+    });
     page.on(
       "pageerror",
       /**
@@ -277,6 +285,12 @@ async function main() {
             .scope();
           return {
             count: scope.result.length,
+            uniqueCount: new Set(
+              scope.result.map((item) => `${item.source}:${item.id}`)
+            ).size,
+            domCount: document.querySelectorAll(
+              '.searchbox [ng-repeat^="song in result"]'
+            ).length,
             error: scope.searchError,
             hasMore: scope.hasMore,
             totalpage: scope.totalpage,
@@ -290,6 +304,20 @@ async function main() {
             ),
           };
         }
+      );
+      assert.equal(
+        result.search.count,
+        result.search.uniqueCount,
+        "search identities must be unique"
+      );
+      assert.equal(
+        result.search.domCount,
+        result.search.count,
+        "search results must render in the DOM"
+      );
+      assert.ok(
+        !report.errors.includes("ngRepeat:dupes"),
+        "Angular search rendering failed"
       );
       result.search.elapsedMs = Date.now() - start;
       let played = 0;
@@ -341,6 +369,27 @@ async function main() {
           );
           if (unavailable) {
             entry.status = "unavailable";
+            await wait(
+              page,
+              () => {
+                const failure = window.__playbackEvents.find(
+                  (event) =>
+                    event.type === "BG_PLAYER:RETRIEVE_URL_FAIL" && event.code
+                );
+                return (
+                  failure &&
+                  Array.from(document.querySelectorAll(".notyf__message")).some(
+                    (element) =>
+                      element.textContent.includes(
+                        i18next.t(`_ERROR_${failure.code}`)
+                      )
+                  )
+                );
+              },
+              null,
+              3000
+            );
+            entry.reasonVisible = true;
           } else {
             entry.firstProgressMs = Date.now() - playStart;
             for (const seconds of [1, 5, 10, 20, 30]) {

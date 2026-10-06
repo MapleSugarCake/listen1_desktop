@@ -190,6 +190,24 @@ test("desktop methods reject other windows, subframes, invalid URLs and controls
  */, async () => {
   const { api, handlers, event } = harness();
   assert.equal(api.isMain(event), true);
+  for (const channel of [
+    "prepareAudioSource",
+    "readAudioSource",
+    "cancelAudioPreparation",
+    "releaseAudioSource",
+  ]) {
+    await assert.rejects(
+      handlers[`desktop:${channel}`]({ ...event, sender: {} }, {}),
+      /Untrusted/
+    );
+    await assert.rejects(
+      handlers[`desktop:${channel}`](
+        { ...event, senderFrame: { ...event.senderFrame } },
+        {}
+      ),
+      /Untrusted/
+    );
+  }
   assert.equal(
     api.isMain({ ...event, senderFrame: { ...event.senderFrame } }),
     false
