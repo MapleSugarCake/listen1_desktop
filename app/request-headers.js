@@ -1,8 +1,21 @@
+/**
+ * 文件职责：根据音乐平台的 URL 调整 Referer、Origin 和移动端请求头，复用已有头字段而不重复添加。
+ *
+ * 文件级定义：
+ * - MOBILE_UA：兼容部分平台接口的移动端 User-Agent 字符串。
+ * - applyPlatformHeaders：按目标站点选择 Referer、Origin 和 User-Agent，原地修改 requestHeaders。
+ */
+/**
+ * MOBILE_UA：兼容部分平台接口的移动端 User-Agent 字符串；类型为 string。
+ * @type {string}
+ */
 const MOBILE_UA =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 14_3 like Mac OS X) AppleWebKit/534.30 (KHTML, like Gecko) Version/4.0 Mobile Safari/534.30";
 
 /**
- * @param {electron.OnBeforeSendHeadersListenerDetails} details
+ * 按目标站点选择 Referer、Origin 和 User-Agent，原地修改 requestHeaders；不适用的头保留原值。
+ * @param {electron.OnBeforeSendHeadersListenerDetails} details Electron 提供的请求详情，含 URL 和请求头；使用 url、requestHeaders 字段。
+ * @returns {void} 无返回值。
  */
 function applyPlatformHeaders(details) {
   let replace_referer = true;
@@ -15,11 +28,11 @@ function applyPlatformHeaders(details) {
 
   if (details.url.includes("://music.163.com/")) {
     referer_value = "https://music.163.com/";
-    origin_value = "https://music.163.com"; // 【新增】严格符合标准的 Origin
+    origin_value = "https://music.163.com"; // Origin 采用不含路径的站点来源。
   }
   if (details.url.includes("://interface3.music.163.com/")) {
     referer_value = "https://music.163.com/";
-    origin_value = "https://music.163.com"; // 【新增】严格符合标准的 Origin
+    origin_value = "https://music.163.com"; // Origin 采用不含路径的站点来源。
   }
   if (details.url.includes("://gist.githubusercontent.com/")) {
     referer_value = "https://gist.githubusercontent.com/";
@@ -83,14 +96,44 @@ function applyPlatformHeaders(details) {
   }
 
   const headers = details.requestHeaders;
+  /**
+   * 不区分大小写查找请求头名称。
+   * @param name 待查找或注册的名称；使用 toLowerCase 字段。
+   * @returns {boolean} 是否存在满足条件的条目。
+   */
   const hasHeader = (name) =>
     Object.keys(headers).some(
+      /**
+       * 筛选检查 Object.keys() 中的条目，key.toLowerCase 的调用结果 是否严格等于 name.toLowerCase 的调用结果。
+       * @param key 来自 Object.keys() 的当前条目；使用 toLowerCase 字段。
+       * @returns {boolean} key.toLowerCase 的调用结果 是否严格等于 name.toLowerCase 的调用结果。
+       */
       (key) => key.toLowerCase() === name.toLowerCase()
     );
+  /**
+   * 优先修改已有同名头，缺少时才创建新字段。
+   * @param name 待查找或注册的名称；使用 toLowerCase 字段。
+   * @param value 待检查或转换的输入值。
+   * @returns {void} 无返回值。
+   */
   const setHeader = (name, value) => {
     Object.keys(headers)
-      .filter((key) => key.toLowerCase() === name.toLowerCase())
-      .forEach((key) => delete headers[key]);
+      .filter(
+        /**
+         * 筛选检查 Object.keys() 中的条目，key.toLowerCase 的调用结果 是否严格等于 name.toLowerCase 的调用结果。
+         * @param key 来自 Object.keys() 的当前条目；使用 toLowerCase 字段。
+         * @returns {boolean} key.toLowerCase 的调用结果 是否严格等于 name.toLowerCase 的调用结果。
+         */
+        (key) => key.toLowerCase() === name.toLowerCase()
+      )
+      .forEach(
+        /**
+         * 逐项处理 Object.keys().filter() 中的条目，delete headers[key]。
+         * @param key 来自 Object.keys().filter() 的当前条目。
+         * @returns {number} delete headers[key]。
+         */
+        (key) => delete headers[key]
+      );
     headers[name] = value;
   };
   if (

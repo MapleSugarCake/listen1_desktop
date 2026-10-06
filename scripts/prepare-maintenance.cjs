@@ -1,10 +1,46 @@
-// Optional Windows audit setup. Normal development uses the pinned Node/npm versions.
+/**
+ * 文件职责：准备可重复的 Windows 维护环境，保存原始清单并校验、安装隔离的 Node 和 npm 工具链。
+ *
+ * 文件级定义：
+ * - fs：从 node:fs 引入，用于文件读写与目录操作。
+ * - path：从 node:path 引入，用于路径解析和拼接。
+ * - cp：从 node:child_process 引入，用于启动外部维护命令。
+ * - os：从 node:os 引入，用于识别操作系统与临时目录。
+ * - crypto：从 node:crypto 引入，用于计算校验摘要及加密测试参考值。
+ * - main：准备可重复的 Windows 维护环境，保存原始清单并校验、安装隔离的 Node 和 npm 工具链。异步步骤失败时向外拒绝，由入口统一设置退出状态。
+ */
+// 可选的 Windows 维护准备脚本；日常开发使用固定的 Node 和 npm 版本。
+/**
+ * fs：从 node:fs 引入，用于文件读写与目录操作；类型为 typeof import("node:fs")。
+ * @type {typeof import("node:fs")}
+ */
 const fs = require("node:fs");
+/**
+ * path：从 node:path 引入，用于路径解析和拼接；类型为 typeof import("node:path")。
+ * @type {typeof import("node:path")}
+ */
 const path = require("node:path");
+/**
+ * cp：从 node:child_process 引入，用于启动外部维护命令；类型为 typeof import("node:child_process")。
+ * @type {typeof import("node:child_process")}
+ */
 const cp = require("node:child_process");
+/**
+ * os：从 node:os 引入，用于识别操作系统与临时目录；类型为 typeof import("node:os")。
+ * @type {typeof import("node:os")}
+ */
 const os = require("node:os");
+/**
+ * crypto：从 node:crypto 引入，用于计算校验摘要及加密测试参考值；类型为 typeof import("node:crypto")。
+ * @type {typeof import("node:crypto")}
+ */
 const crypto = require("node:crypto");
 
+/**
+ * 准备可重复的 Windows 维护环境，保存原始清单并校验、安装隔离的 Node 和 npm 工具链。异步步骤失败时向外拒绝，由入口统一设置退出状态。
+ * 无参数。
+ * @returns {Promise<void>} 异步完成后无返回值；拒绝由调用链处理。
+ */
 async function main() {
   if (process.platform !== "win32" || process.arch !== "x64")
     throw new Error("This audit bootstrap targets Windows x64");
@@ -22,6 +58,11 @@ async function main() {
       repos: [],
     };
     for (const directory of [".", "app/listen1_chrome_extension"]) {
+      /**
+       * 在工作区执行只读 Git 子命令并返回文本输出。
+       * @param args 传递给包装函数的参数。
+       * @returns {*} cp.execFileSync 的调用结果。
+       */
       const git = (args) =>
         cp.execFileSync("git", ["-C", directory, ...args], {
           encoding: "utf8",
@@ -57,7 +98,14 @@ async function main() {
     throw new Error(`Node checksum download failed: ${sums.status}`);
   const expected = (await sums.text())
     .split("\n")
-    .find((line) => line.endsWith("  " + name))
+    .find(
+      /**
+       * 筛选检查 await sums.text().split() 中的条目，line.endsWith 的调用结果。
+       * @param line 来自 await sums.text().split() 的当前条目；使用 endsWith 字段。
+       * @returns {*} line.endsWith 的调用结果。
+       */
+      (line) => line.endsWith("  " + name)
+    )
     ?.split(" ")[0];
   if (!fs.existsSync(archive)) {
     const response = await fetch(base + name);
@@ -101,7 +149,14 @@ async function main() {
     `npm CLI: ${path.join(npmPrefix, "node_modules/npm/bin/npm-cli.js")}`
   );
 }
-main().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+main().catch(
+  /**
+   * 异步操作失败后，更新 process.exitCode，执行 console.error。
+   * @param error 被捕获或传入的异常。
+   * @returns {void} 无返回值。
+   */
+  (error) => {
+    console.error(error);
+    process.exitCode = 1;
+  }
+);

@@ -1,5 +1,26 @@
+/**
+ * 文件职责：生成合成 WAV 音频、标签、同名歌词和损坏文件，供本地音频与 Electron 回归使用。
+ *
+ * 文件级定义：
+ * - fs：从 node:fs 引入，用于文件读写与目录操作。
+ * - path：从 node:path 引入，用于路径解析和拼接。
+ * - writeAudioFixtures：写入带标签的合成 WAV、无标签 WAV、同名 LRC 和损坏音频，返回测试使用的绝对路径。
+ */
+/**
+ * fs：从 node:fs 引入，用于文件读写与目录操作；类型为 typeof import("node:fs")。
+ * @type {typeof import("node:fs")}
+ */
 const fs = require("node:fs");
+/**
+ * path：从 node:path 引入，用于路径解析和拼接；类型为 typeof import("node:path")。
+ * @type {typeof import("node:path")}
+ */
 const path = require("node:path");
+/**
+ * 写入带标签的合成 WAV、无标签 WAV、同名 LRC 和损坏音频，返回测试使用的绝对路径。
+ * @param directory 合成测试文件的输出目录。
+ * @returns {Object} audio、plain、broken 等测试文件的路径集合。
+ */
 function writeAudioFixtures(directory) {
   fs.mkdirSync(directory, { recursive: true });
   const rate = 22050,
@@ -10,6 +31,12 @@ function writeAudioFixtures(directory) {
       Math.round(900 * Math.sin((2 * Math.PI * 440 * i) / rate)),
       i * 2
     );
+  /**
+   * 构造 RIFF 子块，写入块名与长度，并按偶数字节边界补齐。
+   * @param name 待查找或注册的名称。
+   * @param bytes RIFF 子块的二进制内容。
+   * @returns {*} Buffer.concat 的调用结果。
+   */
   const chunk = (name, bytes) => {
     const header = Buffer.alloc(8);
     header.write(name);
