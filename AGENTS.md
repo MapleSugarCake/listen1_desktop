@@ -43,25 +43,30 @@ l1Player → bridge → threadPlayer / Howler → BG_PLAYER:* → UI
 
 主窗口通过专用 preload 暴露 `window.listen1Desktop`，`@electron/remote` 已移除，主窗口设置 `contextIsolation: true`、`nodeIntegration: false`、`sandbox: true`。浏览器扩展仍有独立适配，不能以桌面验证代替扩展验证。
 
-| 页面接口                                                            | 作用与返回                                                         |
-| ------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| `control(operation, params)`                                        | 白名单窗口、快捷键、歌词、代理操作；Promise                        |
-| `openExternal(url)` / `openLogin(url)`                              | HTTP(S) 外部链接 / 有来源限制的隔离登录窗口；Promise               |
-| `cookieGet/Set/Remove(request)`                                     | 平台域名、字段和有效期校验；Promise                                |
-| `importLocalMusic()`                                                | 文件选择 → 最多 4 个并发标签读取 → `{ cancelled, tracks, errors }` |
-| `localFileUrl(trackId)`                                             | 旧 `lmtrack_` 绝对路径 ID → 编码后的文件 URL；Promise              |
-| `prepareAudioSource(request)`                                       | 只读准备当前完整资产，返回资产 ID、指纹、字节数或错误码；Promise   |
-| `readAudioSource(request)`                                          | 已准备资产的有界分块读取，单块最多 1 MiB；Promise                  |
-| `cancelAudioPreparation(requestId)` / `releaseAudioSource(assetId)` | 取消读取／释放资产租约；Promise                                    |
-| `setLyric` / `setTrack` / `setPlaying`                              | 转发歌词、曲目信息和播放状态                                       |
-| `on(channel, callback)`                                             | 白名单桌面事件，去掉 Electron event；返回取消订阅函数              |
-| `setZoomLevel(level)`                                               | 有范围检查的页面缩放                                               |
+| 页面接口                                                            | 作用与返回                                                                              |
+| ------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `control(operation, params)`                                        | 白名单窗口、快捷键、歌词、代理操作；Promise                                             |
+| `openExternal(url)` / `openLogin(url)`                              | HTTP(S) 外部链接 / 有来源限制的隔离登录窗口；Promise                                    |
+| `cookieGet/Set/Remove(request)`                                     | 平台域名、字段和有效期校验；Promise                                                     |
+| `importLocalMusic()`                                                | 文件选择 → 最多 4 个并发标签读取 → `{ cancelled, tracks, errors }`                      |
+| `importLocalLyric()`                                                | 单个 `.lrc` 选择 → 有界读取及严格 UTF-8 解码 → `{ cancelled, lyric, fileName, error? }` |
+| `localFileUrl(trackId)`                                             | 旧 `lmtrack_` 绝对路径 ID → 编码后的文件 URL；Promise                                   |
+| `prepareAudioSource(request)`                                       | 只读准备当前完整资产，返回资产 ID、指纹、字节数或错误码；Promise                        |
+| `readAudioSource(request)`                                          | 已准备资产的有界分块读取，单块最多 1 MiB；Promise                                       |
+| `cancelAudioPreparation(requestId)` / `releaseAudioSource(assetId)` | 取消读取／释放资产租约；Promise                                                         |
+| `setLyric` / `setTrack` / `setPlaying`                              | 转发歌词、曲目信息和播放状态                                                            |
+| `on(channel, callback)`                                             | 白名单桌面事件，去掉 Electron event；返回取消订阅函数                                   |
+| `setZoomLevel(level)`                                               | 有范围检查的页面缩放                                                                    |
 
 主进程校验主窗口、主 frame 和准确本地页面来源；歌词窗使用独立控制白名单。歌词输入保留 `{ lyric, tlyric }`，转发通道分别为 `currentLyric` 和 `currentLyricTrans`。歌词窗使用 `textContent`，保留原有工作区边界处理；原始 ipcRenderer 不暴露给页面。调用双方和窗口生命周期必须一起维护。
 
 登录窗禁止 Node、启用 sandbox 与 webSecurity；登录入口允许指定平台域名。现有请求头和 Cookie SameSite 处理仍需平台登录实测，不能将游客搜索通过视为账号流程通过。更新检查只在普通打包应用启动后异步执行，测试和开发启动跳过，失败不阻塞播放器；桌面设置页查询桌面上游 release，扩展查询扩展上游。
 
 本地标签通过缓存的 ESM import 加载 music-metadata。同步歌词转换为旧播放器可读 LRC，缺失歌词才读取同名 `.lrc`；sidecar 失败保留已成功解析的标签，损坏音频回退文件名。曲目与歌单 ID、存储键和备份格式不迁移。文件 URL 使用 `pathToFileURL`，旧曲目按 ID 恢复真实路径。
+
+新导入歌曲统一以不含扩展名的文件名命名，标签歌手和专辑可留空；重复 ID 跳过，保留旧记录与顺序。桌面两套布局提供本地信息编辑及歌词管理。歌词文件只读取用户选中的 `.lrc`，上限 1 MiB，严格 UTF-8（允许 BOM）；正文须为行级 LRC，空行和元数据不要求时间戳。手动导入先校验、预览再应用，不覆盖音频文件。
+
+歌词替换按原歌曲 ID 保存到页面 `lyric-override:${trackId}`，字段为 `{ lyric, tlyric, offsetMs }`；使用原歌词时可以只保存 `{ offsetMs }`，旧记录默认偏移 0。偏移以整数毫秒保存，每次 ±300、范围 ±60000；提前为负、延后为正，原文与译文共用时间线。无独立有效译文时保存空字符串。歌词管理精简弹窗提供导入、恢复及可展开的时间对齐，搜索进入独立页面，候选先预览再应用。应用成功一次写入歌词与零偏移；恢复先获取原 provider，成功后删除该键，失败保留旧结果。偏移按钮自动保存并立即刷新，不重新请求歌词。共享 `Lyrics` 工具负责解析和存储，`MediaService.getLyric` 默认优先读有效替换；主界面和悬浮窗始终成对更新原文与译文，主进程保留最新一对供悬浮窗加载完成后显示。数据与异步约定见子模块指南，本轮证据见[歌词功能记录](docs/maintenance/LYRICS.md)。
 
 | 持久化位置        | 内容                                                             |
 | ----------------- | ---------------------------------------------------------------- |
@@ -100,6 +105,8 @@ npm run vendor:check --prefix app/listen1_chrome_extension
 | `npm test`                                 | Node 行为测试，包含子模块测试                                                                     |
 | `npm run test:electron`                    | 隔离 profile 的 Electron 页面与桌面能力回归                                                       |
 | `npm run test:online`                      | 游客在线搜索、分页和 5% 音量播放；单独记录外部失败                                                |
+| `npm run test:lyrics`                      | 隔离 profile 的歌词管理、元数据、暂停替换、乱序、两布局/四主题/六语言及重启恢复                   |
+| `npm run test:lyrics:online`               | 游客逐平台搜索及候选原歌词、本地/网络目标应用；不代替在线播放或账号验收                           |
 | `node tests/loudness-electron.cjs`         | 隔离均衡回归及 FFmpeg 独立电平／真峰值测量；需 FFmpeg，`LISTEN1_LOUDNESS_ONLINE=1` 扩展为在线样本 |
 
 32 位 Windows/Linux 和 Linux armv7l 目标已移除。Windows 以 10 及以上为运行基线，macOS 最低 13；本轮实测范围以报告为准，配置架构不是兼容性认证。

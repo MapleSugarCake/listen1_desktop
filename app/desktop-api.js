@@ -38,11 +38,11 @@ const { pathToFileURL, fileURLToPath } = require("node:url");
  * basename：从 node:path 引入，用于提取文件名用于标题回退；类型为 typeof import("node:path").basename。
  * isAbsolute：从 node:path 引入，用于校验旧本地曲目路径；类型为 typeof import("node:path").isAbsolute。
  */
-const { resolve, basename, isAbsolute } = require("node:path");
+const { resolve, basename, extname, isAbsolute } = require("node:path");
 /**
  * readAudioTags：从 ./functions 引入，用于解析本地音频标签与歌词；类型为 typeof import("./functions").readAudioTags。
  */
-const { readAudioTags } = require("./functions");
+const { readAudioTags, readLocalLyric } = require("./functions");
 
 /**
  * cookieDomains：允许桌面 Cookie 操作的平台域名集合；类型为 Array。
@@ -458,7 +458,7 @@ function createDesktopApi({ getMainWindow, getFloatingWindow }) {
                 });
               tracks[index] = {
                 id: `lmtrack_${file}`,
-                title: common.title,
+                title: basename(file, extname(file)),
                 artist: common.artist || "",
                 artist_id: `lmartist_${common.artist || ""}`,
                 album: common.album || "",
@@ -476,6 +476,39 @@ function createDesktopApi({ getMainWindow, getFloatingWindow }) {
       return { cancelled: false, tracks, errors };
     }
   );
+  handle("desktop:importLocalLyric", async () => {
+    const selection = await dialog.showOpenDialog(getMainWindow(), {
+      title: "导入歌词",
+      properties: ["openFile"],
+      filters: [{ name: "LRC", extensions: ["lrc"] }],
+    });
+    if (selection.canceled) return { cancelled: true, lyric: "", fileName: "" };
+    const file = selection.filePaths?.[0];
+    if (!file || selection.filePaths.length !== 1)
+      return {
+        cancelled: false,
+        lyric: "",
+        fileName: "",
+        error: { code: "LYRIC_READ_FAILED" },
+      };
+    try {
+      return {
+        cancelled: false,
+        lyric: await readLocalLyric(file),
+        fileName: basename(file),
+      };
+    } catch (error) {
+      const codes = ["INVALID_LRC_FILE", "INVALID_UTF8", "LYRIC_TOO_LARGE"];
+      return {
+        cancelled: false,
+        lyric: "",
+        fileName: "",
+        error: {
+          code: codes.includes(error.code) ? error.code : "LYRIC_READ_FAILED",
+        },
+      };
+    }
+  });
   return { isMain, isFloating, validControl };
 }
 module.exports = { createDesktopApi, allowedUrl };

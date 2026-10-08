@@ -312,9 +312,10 @@ async function main() {
            * @param track 来自 tracks 的当前条目；使用 title 字段。
            * @returns {boolean} track.title 是否严格等于 "Synthetic title"。
            */
-          (track) => track.title === "Synthetic title"
+          (track) => track.id === `lmtrack_${fixtures.audio}`
         );
         assert.ok(tagged);
+        assert.equal(tagged.title, path.basename(fixtures.audio, ".wav"));
         assert.equal(tagged.artist, "Fixture artist");
         assert.match(tagged.sound_url, /%23/);
         assert.match(tagged.sound_url, /%25/);

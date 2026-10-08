@@ -17,7 +17,7 @@
 /**
  * readFile：从 fs/promises 引入，用于异步读取歌词等本地文件；类型为 typeof import("fs/promises").readFile。
  */
-const { readFile } = require("fs/promises");
+const { readFile, open } = require("fs/promises");
 /**
  * basename：从 path 引入，用于提取文件名用于标题回退；类型为 typeof import("path").basename。
  * extname：从 path 引入，用于提取扩展名；类型为 typeof import("path").extname。
@@ -120,6 +120,42 @@ async function readSidecarLyrics(audioPath) {
 }
 
 module.exports = {
+  // Explicit imports use strict UTF-8; legacy sidecars keep encoding detection.
+  // Bound the read itself, including files that grow while being read.
+  async readLocalLyric(filePath) {
+    const fail = (code) => Object.assign(new Error(code), { code });
+    if (extname(filePath).toLowerCase() !== ".lrc")
+      throw fail("INVALID_LRC_FILE");
+    const handle = await open(filePath, "r");
+    try {
+      const stat = await handle.stat();
+      const limit = 1024 * 1024;
+      if (!stat.isFile()) throw fail("LYRIC_READ_FAILED");
+      if (stat.size > limit) throw fail("LYRIC_TOO_LARGE");
+      const buffer = Buffer.alloc(limit + 1);
+      let length = 0;
+      while (length < buffer.length) {
+        const { bytesRead } = await handle.read(
+          buffer,
+          length,
+          buffer.length - length,
+          length
+        );
+        if (!bytesRead) break;
+        length += bytesRead;
+      }
+      if (length > limit) throw fail("LYRIC_TOO_LARGE");
+      try {
+        return new TextDecoder("utf-8", { fatal: true }).decode(
+          buffer.subarray(0, length)
+        );
+      } catch {
+        throw fail("INVALID_UTF8");
+      }
+    } finally {
+      await handle.close();
+    }
+  },
   /**
    * 读取标签和规范化歌词，缺少歌词时尝试同名 .lrc；解析失败仍以文件名构造 common 标题并保留错误信息。
    * @param {string} filePath 音频文件的绝对路径。

@@ -93,6 +93,7 @@ contextBridge.exposeInMainWorld("listen1Desktop", {
    * @returns {Promise<*>} 主进程处理 "desktop:importLocalMusic" 的 Promise。
    */
   importLocalMusic: () => ipcRenderer.invoke("desktop:importLocalMusic"),
+  importLocalLyric: () => ipcRenderer.invoke("desktop:importLocalLyric"),
   /**
    * 请求将旧 lmtrack_ 绝对路径 ID 还原为经过编码的文件 URL。
    * @param trackId 目标曲目 ID。

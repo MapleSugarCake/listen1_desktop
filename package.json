@@ -16,7 +16,9 @@
     "dist:win:test": "node scripts/build-windows-test.cjs",
     "test": "node --test tests/*.test.cjs app/listen1_chrome_extension/test/*.test.cjs",
     "test:electron": "node tests/electron-smoke.cjs",
-    "test:online": "node tests/online-ui.cjs"
+    "test:online": "node tests/online-ui.cjs",
+    "test:lyrics": "node tests/lyrics-electron.cjs",
+    "test:lyrics:online": "node tests/lyrics-electron.cjs --online"
   },
   "repository": {
     "type": "git",

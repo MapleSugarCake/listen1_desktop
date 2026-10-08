@@ -50,7 +50,7 @@ const { applyPlatformHeaders } = require("../app/request-headers");
  * 无参数。
  * @returns {Object} 包含 handlers、event、api、maximum 的对象。
  */
-function harness() {
+function harness(options = {}) {
   const handlers = {},
     directory = path.resolve(__dirname, "../app");
   const frame = {
@@ -100,19 +100,20 @@ function harness() {
              * 无参数。
              * @returns {Promise<Object>} 异步完成后得到 包含 canceled、filePaths 的对象。
              */
-            showOpenDialog: async () => ({
-              canceled: false,
-              filePaths: Array.from(
-                { length: 17 },
-                /**
-                 * 测试替身：取得 按当前字段拼接的字符串，供用例观察调用与状态。
-                 * @param _ 数组或类数组输入中的当前值；当前函数体未使用，保留调用签名。
-                 * @param i 当前条目的零起点索引。
-                 * @returns {string} 按当前字段拼接的字符串。
-                 */
-                (_, i) => `C:/fixtures/中文 #${i}.wav`
-              ),
-            }),
+            showOpenDialog: async () =>
+              options.selection || {
+                canceled: false,
+                filePaths: Array.from(
+                  { length: 17 },
+                  /**
+                   * 测试替身：取得 按当前字段拼接的字符串，供用例观察调用与状态。
+                   * @param _ 数组或类数组输入中的当前值；当前函数体未使用，保留调用签名。
+                   * @param i 当前条目的零起点索引。
+                   * @returns {string} 按当前字段拼接的字符串。
+                   */
+                  (_, i) => `C:/fixtures/中文 #${i}.wav`
+                ),
+              },
           },
           session: {
             defaultSession: {
@@ -129,6 +130,8 @@ function harness() {
         };
       if (name === "./functions")
         return {
+          readLocalLyric:
+            options.readLocalLyric || (async () => "[00:01]fixture lyric"),
           /**
            * 测试替身：更新 active、maximum，执行 Math.max，供用例观察调用与状态。
            * 无参数。
@@ -249,6 +252,53 @@ test("local import limits metadata concurrency to four and returns encoded file 
   assert.equal(result.tracks.length, 17);
   assert.match(result.tracks[0].sound_url, /%23/);
   assert.equal(result.tracks[0].id, "lmtrack_C:/fixtures/中文 #0.wav");
+  assert.equal(result.tracks[0].title, "中文 #0");
+});
+
+test("LRC import uses a single-file dialog and rejects untrusted frames", async () => {
+  const { handlers, event } = harness({
+    selection: {
+      canceled: false,
+      filePaths: ["C:/fixtures/other-name.lrc"],
+    },
+  });
+  const result = await handlers["desktop:importLocalLyric"](event);
+  assert.equal(result.lyric, "[00:01]fixture lyric");
+  assert.equal(result.fileName, "other-name.lrc");
+  assert.equal(result.cancelled, false);
+  await assert.rejects(
+    handlers["desktop:importLocalLyric"]({ ...event, senderFrame: {} }),
+    /Untrusted/
+  );
+});
+
+test("LRC import cancellation and read errors return safe results without file paths", async () => {
+  let reads = 0;
+  const cancelled = harness({
+    selection: { canceled: true },
+    readLocalLyric: async () => {
+      reads += 1;
+    },
+  });
+  assert.equal(
+    (await cancelled.handlers["desktop:importLocalLyric"](cancelled.event))
+      .cancelled,
+    true
+  );
+  assert.equal(reads, 0);
+  const failed = harness({
+    selection: { canceled: false, filePaths: ["C:/private/song.lrc"] },
+    readLocalLyric: async () => {
+      throw Object.assign(new Error("C:/private/song.lrc"), {
+        code: "INVALID_UTF8",
+      });
+    },
+  });
+  const result = await failed.handlers["desktop:importLocalLyric"](
+    failed.event
+  );
+  assert.equal(result.error.code, "INVALID_UTF8");
+  assert.equal(JSON.stringify(result).includes("private"), false);
 });
 
 test("platform headers handle Electron objects case-insensitively and use a valid Origin" /**

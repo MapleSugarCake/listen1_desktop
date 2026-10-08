@@ -152,6 +152,7 @@ let mainWindow;
  * @type {electron.BrowserWindow}
  */
 let floatingWindow;
+let currentFloatingLyric = { lyric: "", tlyric: "" };
 
 /**
  * appTray：可复用的系统托盘实例；类型为 electron.Tray|undefined。
@@ -561,6 +562,16 @@ function createFloatingWindow(cssStyle) {
        */
       async () => {
         await updateFloatingWindow(cssStyle);
+        if (floatingWindow && !floatingWindow.isDestroyed()) {
+          floatingWindow.webContents.send(
+            "currentLyric",
+            currentFloatingLyric.lyric
+          );
+          floatingWindow.webContents.send(
+            "currentLyricTrans",
+            currentFloatingLyric.tlyric
+          );
+        }
       }
     );
     floatingWindow.on(
@@ -1024,14 +1035,19 @@ ipcMain.on(
       )
     )
       return;
-    if (floatingWindow && floatingWindow !== null) {
-      if (typeof arg === "string") {
-        floatingWindow.webContents.send("currentLyric", arg);
-        floatingWindow.webContents.send("currentLyricTrans", "");
-      } else {
-        floatingWindow.webContents.send("currentLyric", arg.lyric);
-        floatingWindow.webContents.send("currentLyricTrans", arg.tlyric);
-      }
+    currentFloatingLyric =
+      typeof arg === "string"
+        ? { lyric: arg, tlyric: "" }
+        : { lyric: arg.lyric, tlyric: arg.tlyric };
+    if (floatingWindow && !floatingWindow.isDestroyed()) {
+      floatingWindow.webContents.send(
+        "currentLyric",
+        currentFloatingLyric.lyric
+      );
+      floatingWindow.webContents.send(
+        "currentLyricTrans",
+        currentFloatingLyric.tlyric
+      );
     }
   }
 );
