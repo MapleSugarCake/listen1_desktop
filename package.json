@@ -18,7 +18,9 @@
     "test:electron": "node tests/electron-smoke.cjs",
     "test:online": "node tests/online-ui.cjs",
     "test:lyrics": "node tests/lyrics-electron.cjs",
-    "test:lyrics:online": "node tests/lyrics-electron.cjs --online"
+    "test:lyrics:online": "node tests/lyrics-electron.cjs --online",
+    "test:visual": "node tests/visual-electron.cjs",
+    "test:visual:online": "node tests/visual-electron.cjs --online"
   },
   "repository": {
     "type": "git",

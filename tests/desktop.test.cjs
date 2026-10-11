@@ -152,7 +152,7 @@ function harness(options = {}) {
             return { common: { title: "fixture" } };
           },
         };
-      return require(name);
+      return require(name.startsWith("./") ? path.join(directory, name) : name);
     },
   };
   vm.runInNewContext(
@@ -198,6 +198,12 @@ test("desktop methods reject other windows, subframes, invalid URLs and controls
     "readAudioSource",
     "cancelAudioPreparation",
     "releaseAudioSource",
+    "importLocalCover",
+    "localCoverUrl",
+    "retainLocalCover",
+    "releaseLocalCover",
+    "inspectAudioSource",
+    "cancelAudioInspection",
   ]) {
     await assert.rejects(
       handlers[`desktop:${channel}`]({ ...event, sender: {} }, {}),

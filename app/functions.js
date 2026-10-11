@@ -2,7 +2,7 @@
  * 文件职责：读取本地音频标签，将同步歌词规范化为 LRC，并在缺少内嵌歌词时容错读取同名歌词文件。
  *
  * 文件级定义：
- * - readFile：从 fs/promises 引入，用于异步读取歌词等本地文件。
+ * - open：从 fs/promises 引入，用于有界读取歌词文件。
  * - basename：从 path 引入，用于提取文件名用于标题回退。
  * - extname：从 path 引入，用于提取扩展名。
  * - parse：从 path 引入，用于拆解文件路径以寻找同名歌词。
@@ -15,9 +15,9 @@
  * - module.exports.readAudioTags：读取标签和规范化歌词，缺少歌词时尝试同名 .lrc。
  */
 /**
- * readFile：从 fs/promises 引入，用于异步读取歌词等本地文件；类型为 typeof import("fs/promises").readFile。
+ * open：从 fs/promises 引入，用于有界读取歌词文件；类型为 typeof import("fs/promises").open。
  */
-const { readFile, open } = require("fs/promises");
+const { open } = require("fs/promises");
 /**
  * basename：从 path 引入，用于提取文件名用于标题回退；类型为 typeof import("path").basename。
  * extname：从 path 引入，用于提取扩展名；类型为 typeof import("path").extname。
@@ -110,13 +110,52 @@ async function readSidecarLyrics(audioPath) {
   });
 
   try {
-    const fileBuffer = await readFile(lyricPath);
+    const handle = await open(lyricPath, "r");
+    let fileBuffer;
+    try {
+      const limit = 1024 * 1024;
+      if ((await handle.stat()).size > limit) return undefined;
+      const buffer = Buffer.alloc(limit + 1);
+      let size = 0;
+      while (size < buffer.length) {
+        const { bytesRead } = await handle.read(
+          buffer,
+          size,
+          buffer.length - size,
+          size
+        );
+        if (!bytesRead) break;
+        size += bytesRead;
+      }
+      if (size > limit) return undefined;
+      fileBuffer = buffer.subarray(0, size);
+    } finally {
+      await handle.close();
+    }
     const encoding = detect(fileBuffer) || "utf-8";
     return new TextDecoder(encoding).decode(fileBuffer);
   } catch {
     // .lrc 缺失、损坏或编码异常时，仍返回音频标签信息。
     return undefined;
   }
+}
+
+async function readOriginalLyrics(filePath, common = {}) {
+  const lyrics = normalizeLyrics(common.lyrics);
+  if (lyrics.length)
+    return { lyric: lyrics[0], provenance: { kind: "embedded" } };
+  const lyric = await readSidecarLyrics(filePath);
+  return lyric
+    ? {
+        lyric,
+        provenance: {
+          kind: "file",
+          fileName: basename(
+            format({ ...parse(filePath), ext: ".lrc", base: undefined })
+          ),
+        },
+      }
+    : { lyric: "" };
 }
 
 module.exports = {
@@ -169,9 +208,19 @@ module.exports = {
       metaData.common ||= {};
       metaData.common.title ||= fileName;
       metaData.common.lyrics = normalizeLyrics(metaData.common.lyrics);
+      if (metaData.common.lyrics.length)
+        metaData.lyricProvenance = { kind: "embedded" };
       if (!metaData.common.lyrics.length) {
         const lyric = await readSidecarLyrics(filePath);
-        if (lyric) metaData.common.lyrics = [lyric];
+        if (lyric) {
+          metaData.common.lyrics = [lyric];
+          metaData.lyricProvenance = {
+            kind: "file",
+            fileName: basename(
+              format({ ...parse(filePath), ext: ".lrc", base: undefined })
+            ),
+          };
+        }
       }
       return metaData;
     } catch (error) {
@@ -186,4 +235,5 @@ module.exports = {
     }
   },
   normalizeLyrics,
+  readOriginalLyrics,
 };

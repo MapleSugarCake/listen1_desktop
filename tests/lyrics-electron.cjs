@@ -309,7 +309,12 @@ async function offlineChecks(app, page) {
     .locator(".detail-songlist li")
     .filter({ hasText: local.title });
   await page.mouse.move(5, 5);
-  assert.equal(await row.locator(".manage-lyrics").isVisible(), false);
+  assert.equal(
+    await row
+      .locator("track-actions")
+      .evaluate((node) => getComputedStyle(node).opacity),
+    "0"
+  );
   await row.hover();
   assert.equal(await row.locator(".manage-lyrics").isVisible(), true);
   await row.locator(".edit-local-track").click();
@@ -428,6 +433,7 @@ async function offlineChecks(app, page) {
       .lyricArray.some((line) => line.translationFlag)
   );
   assert.equal((await override(page, local.id)).tlyric.includes("译文"), true);
+  assert.equal((await override(page, local.id)).provenance.platform, "qq");
   assert.equal(
     await page.evaluate(
       () =>
@@ -539,6 +545,10 @@ async function offlineChecks(app, page) {
     () => document.getElementById("currentLyricTrans").textContent === ""
   );
   assert.equal((await override(page, local.id)).tlyric, "");
+  assert.equal(
+    (await override(page, local.id)).provenance.fileName,
+    path.basename(importedLrc)
+  );
   assert.equal(
     (await currentLyrics(page)).some((line) => line.translationFlag),
     false

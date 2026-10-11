@@ -40,6 +40,17 @@ const events = new Set([
 contextBridge.exposeInMainWorld("listen1Desktop", {
   version: 1,
   platform: process.platform,
+  importLocalCover: () => ipcRenderer.invoke("desktop:importLocalCover"),
+  localCoverUrl: (assetId) =>
+    ipcRenderer.invoke("desktop:localCoverUrl", assetId),
+  retainLocalCover: (assetId) =>
+    ipcRenderer.invoke("desktop:retainLocalCover", assetId),
+  releaseLocalCover: (assetId) =>
+    ipcRenderer.invoke("desktop:releaseLocalCover", assetId),
+  inspectAudioSource: (request) =>
+    ipcRenderer.invoke("desktop:inspectAudioSource", request),
+  cancelAudioInspection: (requestId) =>
+    ipcRenderer.invoke("desktop:cancelAudioInspection", requestId),
   prepareAudioSource: (request) =>
     ipcRenderer.invoke("desktop:prepareAudioSource", request),
   readAudioSource: (request) =>

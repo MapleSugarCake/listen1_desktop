@@ -129,6 +129,38 @@ function allowedUrl(value, domains) {
  * @returns {Object} 包含 isMain、isFloating、validControl 的对象。
  */
 function createDesktopApi({ getMainWindow, getFloatingWindow }) {
+  let inspection;
+  let covers;
+  const getInspection = () => {
+    if (!inspection) {
+      inspection = require("./audio-inspection").createAudioInspection(
+        (url, options) =>
+          getMainWindow().webContents.session.fetch(url, options)
+      );
+      const manager = inspection;
+      getMainWindow().webContents.on("did-start-navigation", (details) => {
+        if (details.isMainFrame && !details.isSameDocument) manager.dispose();
+      });
+      getMainWindow().webContents.once("destroyed", () => {
+        manager.dispose();
+        inspection = null;
+      });
+      require("electron").app.once("will-quit", () => manager.dispose());
+    }
+    return inspection;
+  };
+  const getCovers = () => {
+    if (!covers) {
+      const { app } = require("electron");
+      const { decodeCoverImage } = require("./cover-image");
+      covers = require("./local-covers").createLocalCovers(
+        app.getPath("userData"),
+        (bytes, extension) =>
+          decodeCoverImage(bytes, extension, getMainWindow())
+      );
+    }
+    return covers;
+  };
   let audioAssets;
   const getAudioAssets = () => {
     if (!audioAssets) {
@@ -244,6 +276,40 @@ function createDesktopApi({ getMainWindow, getFloatingWindow }) {
   handle("desktop:readAudioSource", (input) => getAudioAssets().read(input));
   handle("desktop:cancelAudioPreparation", (id) => audioAssets?.cancel(id));
   handle("desktop:releaseAudioSource", (id) => audioAssets?.release(id));
+  handle("desktop:inspectAudioSource", (input) =>
+    getInspection().inspect(input)
+  );
+  handle("desktop:cancelAudioInspection", (id) => inspection?.cancel(id));
+  handle("desktop:localCoverUrl", (id) => getCovers().url(id));
+  handle("desktop:retainLocalCover", (id) => getCovers().retain(id));
+  handle("desktop:releaseLocalCover", (id) => getCovers().release(id));
+  handle("desktop:importLocalCover", async () => {
+    const selection = await dialog.showOpenDialog(getMainWindow(), {
+      title: "更换歌曲封面",
+      properties: ["openFile"],
+      filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp"] }],
+    });
+    if (selection.canceled) return { cancelled: true };
+    try {
+      if (selection.filePaths?.length !== 1)
+        throw new Error("Invalid selection");
+      return {
+        cancelled: false,
+        ...(await getCovers().import(selection.filePaths[0])),
+      };
+    } catch (error) {
+      return {
+        cancelled: false,
+        error: {
+          code: ["COVER_INVALID", "COVER_TOO_LARGE", "RESOURCE_LIMIT"].includes(
+            error.code
+          )
+            ? error.code
+            : "COVER_READ_FAILED",
+        },
+      };
+    }
+  });
   handle(
     "desktop:openExternal",
     /**
@@ -466,6 +532,10 @@ function createDesktopApi({ getMainWindow, getFloatingWindow }) {
                 source: "localmusic",
                 source_url: "",
                 img_url: "",
+                audio_info: require("./audio-inspection").audioFields(
+                  metadata.format
+                ),
+                lyric_provenance: metadata.lyricProvenance,
                 lyrics: common.lyrics || [],
                 sound_url: pathToFileURL(file).href,
               };

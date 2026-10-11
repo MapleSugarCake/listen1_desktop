@@ -22,6 +22,8 @@ l1Player → bridge → threadPlayer / Howler → BG_PLAYER:* → UI
 
 桌面音量均衡使用 `app/audio-assets.js` 经当前 session 获取完整音频，共享子模块的 `loudness.js` 测量 RMS，`normalized_audio.js` 播放相同资产。固定增益／轻微限峰位于独立主音量之前；关闭或确认不可处理时使用原 Howler 路径。架构取舍见 [ADR](docs/adr/0001-rms-audio-playback.md)，本轮验证见 [音量均衡报告](docs/maintenance/LOUDNESS.md)。
 
+桌面歌曲详情由共享 `track_details.js` 展示，`app/audio-inspection.js` 只读解析音频及本地 stat；它不操作播放队列。网络信息须手动读取，复用实际音源、当前 Electron session、现有媒体域名白名单和请求头规则，解析读取上限 8 MiB、总预算 15 秒。界面美化、封面与详情的验证边界见[界面维护记录](docs/maintenance/VISUALS.md)。
+
 ## 2. 目录与依赖
 
 | 路径                                           | 职责                                                                    |
@@ -32,6 +34,8 @@ l1Player → bridge → threadPlayer / Howler → BG_PLAYER:* → UI
 | `app/desktop-api.js`、`app/desktop-preload.js` | 主窗口桌面能力边界，来源和参数校验                                      |
 | `app/preload.js`、`app/floatingWindow.html`    | 独立的悬浮歌词窗口桥接和显示                                            |
 | `app/functions.js`                             | 本地标签、歌词规范化和独立的 sidecar 容错                               |
+| `app/local-covers.js`、`app/cover-image.js`    | 受限封面副本、真实图片解码、暂存及恢复                                  |
+| `app/audio-inspection.js`                      | 有界本地/网络元数据检查、Range 读取与取消                               |
 | `app/listen1_chrome_extension`                 | 独立包和锁文件，静态业务播放器；不是 npm workspace                      |
 | `scripts/`、`tests/`、`docs/maintenance/`      | 工具、行为/桌面测试、依赖和验证证据                                     |
 | `build/`、`app/resources/`                     | 已跟踪的打包图标、系统集成图片，不是输出目录                            |
@@ -43,20 +47,23 @@ l1Player → bridge → threadPlayer / Howler → BG_PLAYER:* → UI
 
 主窗口通过专用 preload 暴露 `window.listen1Desktop`，`@electron/remote` 已移除，主窗口设置 `contextIsolation: true`、`nodeIntegration: false`、`sandbox: true`。浏览器扩展仍有独立适配，不能以桌面验证代替扩展验证。
 
-| 页面接口                                                            | 作用与返回                                                                              |
-| ------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `control(operation, params)`                                        | 白名单窗口、快捷键、歌词、代理操作；Promise                                             |
-| `openExternal(url)` / `openLogin(url)`                              | HTTP(S) 外部链接 / 有来源限制的隔离登录窗口；Promise                                    |
-| `cookieGet/Set/Remove(request)`                                     | 平台域名、字段和有效期校验；Promise                                                     |
-| `importLocalMusic()`                                                | 文件选择 → 最多 4 个并发标签读取 → `{ cancelled, tracks, errors }`                      |
-| `importLocalLyric()`                                                | 单个 `.lrc` 选择 → 有界读取及严格 UTF-8 解码 → `{ cancelled, lyric, fileName, error? }` |
-| `localFileUrl(trackId)`                                             | 旧 `lmtrack_` 绝对路径 ID → 编码后的文件 URL；Promise                                   |
-| `prepareAudioSource(request)`                                       | 只读准备当前完整资产，返回资产 ID、指纹、字节数或错误码；Promise                        |
-| `readAudioSource(request)`                                          | 已准备资产的有界分块读取，单块最多 1 MiB；Promise                                       |
-| `cancelAudioPreparation(requestId)` / `releaseAudioSource(assetId)` | 取消读取／释放资产租约；Promise                                                         |
-| `setLyric` / `setTrack` / `setPlaying`                              | 转发歌词、曲目信息和播放状态                                                            |
-| `on(channel, callback)`                                             | 白名单桌面事件，去掉 Electron event；返回取消订阅函数                                   |
-| `setZoomLevel(level)`                                               | 有范围检查的页面缩放                                                                    |
+| 页面接口                                                                              | 作用与返回                                                                              |
+| ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `control(operation, params)`                                                          | 白名单窗口、快捷键、歌词、代理操作；Promise                                             |
+| `openExternal(url)` / `openLogin(url)`                                                | HTTP(S) 外部链接 / 有来源限制的隔离登录窗口；Promise                                    |
+| `cookieGet/Set/Remove(request)`                                                       | 平台域名、字段和有效期校验；Promise                                                     |
+| `importLocalMusic()`                                                                  | 文件选择 → 最多 4 个并发标签读取 → `{ cancelled, tracks, errors }`                      |
+| `importLocalLyric()`                                                                  | 单个 `.lrc` 选择 → 有界读取及严格 UTF-8 解码 → `{ cancelled, lyric, fileName, error? }` |
+| `importLocalCover()`                                                                  | PNG/JPEG/WebP 选择、内容校验及暂存 → `{ cancelled, assetId?, fileName?, url?, error? }` |
+| `localCoverUrl(assetId)` / `retainLocalCover(assetId)` / `releaseLocalCover(assetId)` | UUID 副本解析、提交保留及仅暂存释放；不接受页面文件路径                                 |
+| `inspectAudioSource(request)` / `cancelAudioInspection(requestId)`                    | 音频检查与取消 → `{ audioInfo, filePath?, fileSize?, originalLyric?, error? }`          |
+| `localFileUrl(trackId)`                                                               | 旧 `lmtrack_` 绝对路径 ID → 编码后的文件 URL；Promise                                   |
+| `prepareAudioSource(request)`                                                         | 只读准备当前完整资产，返回资产 ID、指纹、字节数或错误码；Promise                        |
+| `readAudioSource(request)`                                                            | 已准备资产的有界分块读取，单块最多 1 MiB；Promise                                       |
+| `cancelAudioPreparation(requestId)` / `releaseAudioSource(assetId)`                   | 取消读取／释放资产租约；Promise                                                         |
+| `setLyric` / `setTrack` / `setPlaying`                                                | 转发歌词、曲目信息和播放状态                                                            |
+| `on(channel, callback)`                                                               | 白名单桌面事件，去掉 Electron event；返回取消订阅函数                                   |
+| `setZoomLevel(level)`                                                                 | 有范围检查的页面缩放                                                                    |
 
 主进程校验主窗口、主 frame 和准确本地页面来源；歌词窗使用独立控制白名单。歌词输入保留 `{ lyric, tlyric }`，转发通道分别为 `currentLyric` 和 `currentLyricTrans`。歌词窗使用 `textContent`，保留原有工作区边界处理；原始 ipcRenderer 不暴露给页面。调用双方和窗口生命周期必须一起维护。
 
@@ -66,7 +73,13 @@ l1Player → bridge → threadPlayer / Howler → BG_PLAYER:* → UI
 
 新导入歌曲统一以不含扩展名的文件名命名，标签歌手和专辑可留空；重复 ID 跳过，保留旧记录与顺序。桌面两套布局提供本地信息编辑及歌词管理。歌词文件只读取用户选中的 `.lrc`，上限 1 MiB，严格 UTF-8（允许 BOM）；正文须为行级 LRC，空行和元数据不要求时间戳。手动导入先校验、预览再应用，不覆盖音频文件。
 
+封面编辑先选择及预览，再随本地元数据确认保存。实际内容限 PNG/JPEG/WebP、10 MiB、边长 8192 像素及 4000 万像素；保存副本到当前 userData 的 `covers/<UUID>/`，记录新增 `cover_asset_id` 和真实 `cover_file_name`。WebP 通过临时隐藏 Chromium 窗口解码，该窗口无 preload/Node、启用 sandbox、使用非持久 session、禁止网络及文件导航，完成、超时或主窗口关闭后销毁。元数据写入失败保留旧记录；关闭编辑仅释放尚未提交的副本。旧记录无需迁移，重启按 UUID 解析 URL；本地库、相关歌单、队列和当前 UI 同步封面，原音频保持只读。
+
+新导入记录的 `audio_info` 只保存已解析格式字段，`lyric_provenance` 仅在实际读到同名 sidecar 时带文件名；内嵌歌词无文件名。旧记录详情读取实际文件补充信息，保留编辑后的歌名、歌手和专辑。网络检查优先使用 Range，非 Range 仍有界读取；资源变化清空本次结果，读取不足仅返回确认字段。主窗口导航、销毁、退出以及页面取消会终止检查。
+
 歌词替换按原歌曲 ID 保存到页面 `lyric-override:${trackId}`，字段为 `{ lyric, tlyric, offsetMs }`；使用原歌词时可以只保存 `{ offsetMs }`，旧记录默认偏移 0。偏移以整数毫秒保存，每次 ±300、范围 ±60000；提前为负、延后为正，原文与译文共用时间线。无独立有效译文时保存空字符串。歌词管理精简弹窗提供导入、恢复及可展开的时间对齐，搜索进入独立页面，候选先预览再应用。应用成功一次写入歌词与零偏移；恢复先获取原 provider，成功后删除该键，失败保留旧结果。偏移按钮自动保存并立即刷新，不重新请求歌词。共享 `Lyrics` 工具负责解析和存储，`MediaService.getLyric` 默认优先读有效替换；主界面和悬浮窗始终成对更新原文与译文，主进程保留最新一对供悬浮窗加载完成后显示。数据与异步约定见子模块指南，本轮证据见[歌词功能记录](docs/maintenance/LYRICS.md)。
+
+替换记录可追加 `provenance: { kind, fileName?, platform? }`；手动导入保存真实 basename，搜索替换保存实际候选平台。旧替换记录来源未知时留空，恢复成功后显示原 provider 来源；歌词平台独立于音频换源。没有明确文件来源的 JSON 或内嵌歌词不编造文件名。
 
 | 持久化位置        | 内容                                                             |
 | ----------------- | ---------------------------------------------------------------- |
@@ -74,8 +87,11 @@ l1Player → bridge → threadPlayer / Howler → BG_PLAYER:* → UI
 | 页面 localStorage | 歌单、队列、主题、语言、播放设置和部分认证数据                   |
 | Electron session  | 平台 Cookie                                                      |
 | 用户原音频文件    | 只读取，歌单保存路径和元数据，不复制音频                         |
+| userData/covers   | 用户确认的封面图片副本及原文件名；JSON/Gist 仅保存曲目中的引用   |
 
 JSON/Gist 备份不包含上述全部桌面状态、Cookie 和音频，JSON 遍历 localStorage，不能当作已脱敏文件。`LISTEN1_TEST_USER_DATA` 是测试专用环境变量，为开发与打包应用指定可丢弃 profile，并隔离更新和测试窗口行为。不要指向真实用户目录。NSIS 仍保留原有 `deleteAppDataOnUninstall: true`，卸载验证必须使用独立环境。
+
+跨设备恢复编辑后的封面时须同时迁移 userData 下的 `covers` 目录；不会把图片编码进 JSON/Gist。已提交副本不会因释放暂存或切换封面而自动删除，以保留旧备份引用。
 
 ## 4. 开发、打包与校验
 
@@ -107,6 +123,8 @@ npm run vendor:check --prefix app/listen1_chrome_extension
 | `npm run test:online`                      | 游客在线搜索、分页和 5% 音量播放；单独记录外部失败                                                |
 | `npm run test:lyrics`                      | 隔离 profile 的歌词管理、元数据、暂停替换、乱序、两布局/四主题/六语言及重启恢复                   |
 | `npm run test:lyrics:online`               | 游客逐平台搜索及候选原歌词、本地/网络目标应用；不代替在线播放或账号验收                           |
+| `npm run test:visual`                      | 隔离 profile 的四主题/两布局、详情/焦点、封面/回滚/重启、歌词来源、侧栏和宽窄截图                 |
+| `npm run test:visual:online`               | 上述回归加网易/QQ/酷我游客音频信息抽查；不播放远程音频，外部失败独立记录                          |
 | `node tests/loudness-electron.cjs`         | 隔离均衡回归及 FFmpeg 独立电平／真峰值测量；需 FFmpeg，`LISTEN1_LOUDNESS_ONLINE=1` 扩展为在线样本 |
 
 32 位 Windows/Linux 和 Linux armv7l 目标已移除。Windows 以 10 及以上为运行基线，macOS 最低 13；本轮实测范围以报告为准，配置架构不是兼容性认证。
