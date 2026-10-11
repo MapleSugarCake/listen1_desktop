@@ -24,7 +24,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/listen1/listen1_desktop.git"
+    "url": "git+https://github.com/MapleSugarCake/listen1_desktop.git"
   },
   "keywords": [
     "Electron",
@@ -33,9 +33,9 @@
   "author": "Listen 1 <githublisten1@gmail.com>",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/listen1/listen1_desktop/issues"
+    "url": "https://github.com/MapleSugarCake/listen1_desktop/issues"
   },
-  "homepage": "https://github.com/listen1/listen1_desktop#readme",
+  "homepage": "https://github.com/MapleSugarCake/listen1_desktop",
   "engines": {
     "node": ">=24.21.0 <25",
     "npm": ">=12 <13"
@@ -49,6 +49,11 @@
     "productName": "Listen1",
     "asar": true,
     "artifactName": "${name}_${version}_${os}_${arch}.${ext}",
+    "publish": {
+      "provider": "github",
+      "owner": "MapleSugarCake",
+      "repo": "listen1_desktop"
+    },
     "files": [
       "**/*",
       "!listen1_chrome_extension/{node_modules,test,scripts,.github,.husky}/**",

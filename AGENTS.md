@@ -4,7 +4,7 @@
 
 ## 1. 项目与架构
 
-桌面仓库负责 Electron 生命周期、窗口、系统集成和安装包；`app/listen1_chrome_extension` 是独立 Git 子模块，负责 AngularJS 页面、音乐业务及扩展入口。`.gitmodules` 指向 MapleSugarCake 的共享播放器仓库，包元数据仍有 listen1 上游链接，二者用途不同。父仓库保存子模块提交指针，不能代替保存子模块文件。
+桌面仓库负责 Electron 生命周期、窗口、系统集成和安装包；`app/listen1_chrome_extension` 是独立 Git 子模块，负责 AngularJS 页面、音乐业务及扩展入口。`.gitmodules` 和各包仓库元数据指向对应的 MapleSugarCake fork。父仓库保存子模块提交指针，不能代替保存子模块文件。
 
 ```text
 app/main.js → 主窗口 listen1.html（隔离，禁止页面 Node）
@@ -67,7 +67,9 @@ l1Player → bridge → threadPlayer / Howler → BG_PLAYER:* → UI
 
 主进程校验主窗口、主 frame 和准确本地页面来源；歌词窗使用独立控制白名单。歌词输入保留 `{ lyric, tlyric }`，转发通道分别为 `currentLyric` 和 `currentLyricTrans`。歌词窗使用 `textContent`，保留原有工作区边界处理；原始 ipcRenderer 不暴露给页面。调用双方和窗口生命周期必须一起维护。
 
-登录窗禁止 Node、启用 sandbox 与 webSecurity；登录入口允许指定平台域名。现有请求头和 Cookie SameSite 处理仍需平台登录实测，不能将游客搜索通过视为账号流程通过。更新检查只在普通打包应用启动后异步执行，测试和开发启动跳过，失败不阻塞播放器；桌面设置页查询桌面上游 release，扩展查询扩展上游。
+登录窗禁止 Node、启用 sandbox 与 webSecurity；登录入口允许指定平台域名。现有请求头和 Cookie SameSite 处理仍需平台登录实测，不能将游客搜索通过视为账号流程通过。更新检查只在普通打包应用启动后异步执行，测试和开发启动跳过，失败不阻塞播放器；桌面构建明确指定 GitHub 更新源 `MapleSugarCake/listen1_desktop`。桌面设置页查询该 fork 的最新正式 Release，扩展查询 `MapleSugarCake/listen1_chrome_extension`；无正式发布、查询失败或缺失标签时隐藏最新版一行，不回退到上游。
+
+两套关于页面显示 `listen1_maple` 和联系邮箱 `maplecakeqaq@gmail.com`，主页与 Issue 按桌面／扩展指向各自 fork。当前与最新版仅在显示时追加一次 `_maple`，包版本、manifest 和发布标签仍使用原有数字版本规则。安装身份、窗口标题、图标、用户数据目录和 OAuth 回调不随关于信息改名，保留原作者与设计者署名。实际自动更新需要公开的更高版本 Release 及对应安装包、更新元数据；修改来源不能代替下载、安装和跨系统验收。
 
 本地标签通过缓存的 ESM import 加载 music-metadata。同步歌词转换为旧播放器可读 LRC，缺失歌词才读取同名 `.lrc`；sidecar 失败保留已成功解析的标签，损坏音频回退文件名。曲目与歌单 ID、存储键和备份格式不迁移。文件 URL 使用 `pathToFileURL`，旧曲目按 ID 恢复真实路径。
 
